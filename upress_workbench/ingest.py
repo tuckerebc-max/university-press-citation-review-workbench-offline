@@ -74,7 +74,7 @@ def _extract_docx(source: SourceFile, chapter_id: str) -> Chapter:
     body_index = 0
     table_index = 0
     paragraph_index = -1
-    notes: list[str] = []
+    notes = ["Word coverage includes ordinary body paragraphs, top-level table cells and readable footnote/endnote text. Check fields, text boxes, headers, footers, nested tables, drawings, existing comments and tracked revisions separately."]
 
     for item in document.iter_inner_content():
         if hasattr(item, "text") and not isinstance(item, Table):
@@ -114,22 +114,41 @@ def _extract_docx(source: SourceFile, chapter_id: str) -> Chapter:
 
 def _extract_text(source: SourceFile, chapter_id: str) -> Chapter:
     try:
-        text = source.path.read_text(encoding="utf-8", errors="strict")
+        text = source.path.read_text(encoding="utf-8-sig", errors="strict")
     except UnicodeDecodeError as exc:
         raise SafetyError("Text and Markdown chapters must be UTF-8 encoded.") from exc
     blocks: list[Block] = []
     in_references = False
-    for index, segment in enumerate(re.split(r"\n\s*\n", text), 1):
-        cleaned = segment.strip()
+    pending: list[str] = []
+
+    def flush() -> None:
+        if pending:
+            index = len(blocks) + 1
+            blocks.append(Block(f"body.p{index:04d}", "\n".join(pending), "reference_list" if in_references else "body", in_references, index - 1))
+            pending.clear()
+
+    for line in text.splitlines():
+        cleaned = line.strip()
+        heading = re.sub(r"^#{1,6}\s+", "", cleaned).casefold().rstrip(":")
         if not cleaned:
-            continue
-        heading = re.sub(r"^#{1,6}\s+", "", cleaned).strip().casefold().rstrip(":")
-        if heading in REFERENCE_HEADINGS:
+            flush()
+        elif heading in REFERENCE_HEADINGS:
+            flush()
             in_references = True
-        blocks.append(Block(f"body.p{index:04d}", cleaned, "reference_list" if in_references else "body", in_references, index - 1))
+            pending.append(cleaned)
+            flush()
+        else:
+            # Adjacent author/date entries are common in plain-text bibliographies;
+            # keep wrapped titles, publishers and DOI continuations with the entry.
+            if in_references and re.match(r"^[^\d(]{1,220}\((?:\d{4}[a-z]?|n\.\s*d\.)\)", cleaned, re.I):
+                flush()
+            pending.append(cleaned)
+    flush()
     if not blocks:
         raise SafetyError("No readable text was found in the chapter.")
-    notes = [] if in_references else ["No explicit References or Bibliography heading was detected."]
+    notes = ["Text and Markdown use paragraph and author/date line boundaries. Confirm wrapped entries and the end of the reference list."]
+    if not in_references:
+        notes.append("No explicit References or Bibliography heading was detected.")
     return Chapter(chapter_id, str(source.path), source.relative_path, source.path.suffix.lower(), source.size, source.sha256, blocks, "high" if in_references else "partial", notes)
 
 

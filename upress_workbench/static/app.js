@@ -51,8 +51,8 @@ async function checkHealth() {
     const value = await api("/api/health");
     const skillsReady = Object.values(value.skills).every(item => item.ready);
     const ready = value.provider_key_configured && skillsReady;
-    node.textContent = ready ? `${value.model} · ready` : "Configuration needs attention";
-    node.className = `health ${ready ? "ready" : "problem"}`;
+    node.textContent = ready ? "Offline ready · provider configured" : "Offline ready";
+    node.className = "health ready";
   } catch (error) {
     node.textContent = "Workbench unavailable";
     node.className = "health problem";
@@ -167,6 +167,59 @@ document.getElementById("open-output").addEventListener("click", async () => {
   if (!currentRunId) return;
   try { await api(`/api/runs/${encodeURIComponent(currentRunId)}/open`, {method: "POST", body: "{}"}); }
   catch (error) { showError(error.message); }
+});
+
+const privateForm = document.getElementById("private-form");
+const sourceField = privateForm.elements.namedItem("source");
+const inspectButton = document.getElementById("private-inspect");
+const buildButton = document.getElementById("private-build");
+const privateHash = document.getElementById("private-hash");
+const privateResult = document.getElementById("private-result");
+let selection = null;
+sourceField.addEventListener("input", () => {
+  selection = null;
+  privateHash.textContent = "";
+  privateResult.textContent = "";
+  buildButton.disabled = true;
+});
+inspectButton.addEventListener("click", async () => {
+  const source = sourceField.value.trim();
+  selection = null;
+  buildButton.disabled = true;
+  inspectButton.disabled = true;
+  privateHash.textContent = "";
+  privateResult.textContent = "Reading the selected file…";
+  try {
+    const result = await api("/api/private/inspect", {method: "POST", body: JSON.stringify({source})});
+    if (sourceField.value.trim() !== source) return;
+    selection = {source, sha256: result.sha256};
+    privateHash.textContent = `Selected SHA-256 · ${result.sha256}`;
+    privateResult.textContent = "Confirm the edition and output folder before building.";
+    buildButton.disabled = false;
+  } catch (error) {
+    privateResult.textContent = error.message;
+  } finally {
+    inspectButton.disabled = false;
+  }
+});
+privateForm.addEventListener("submit", async event => {
+  event.preventDefault();
+  if (!selection || selection.source !== sourceField.value.trim()) return;
+  const payload = {...Object.fromEntries(new FormData(privateForm)), ...selection};
+  buildButton.disabled = true;
+  inspectButton.disabled = true;
+  sourceField.readOnly = true;
+  privateResult.textContent = "Building the local packet…";
+  try {
+    const result = await api("/api/private/review", {method: "POST", body: JSON.stringify(payload)});
+    privateResult.textContent = `Packet ready for human review. Open author-review.docx in ${result.output_folder}`;
+  } catch (error) {
+    privateResult.textContent = error.message;
+  } finally {
+    sourceField.readOnly = false;
+    inspectButton.disabled = false;
+    buildButton.disabled = !selection;
+  }
 });
 
 checkHealth();

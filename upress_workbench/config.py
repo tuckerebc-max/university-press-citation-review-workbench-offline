@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 APP_NAME = "University Press Citation Review Workbench"
@@ -10,7 +11,9 @@ DEFAULT_PORT = 8765
 APP_ROOT = Path(__file__).resolve().parents[1]
 STATIC_ROOT = APP_ROOT / "upress_workbench" / "static"
 VENDOR_ROOT = APP_ROOT / "vendor"
-DATA_ROOT = APP_ROOT / "data"
+# This separate candidate keeps its browser state outside both the code checkout
+# and the original application's store. The offline CLI does not open a database.
+DATA_ROOT = Path(os.environ.get("LOCALAPPDATA") or (Path.home() / ".local" / "state")) / "PressReviewPrivateCandidate"
 DB_PATH = DATA_ROOT / "workbench.sqlite3"
 
 SUPPORTED_EXTENSIONS = {".docx", ".md", ".txt"}

@@ -20,12 +20,28 @@
   <main>
     <section class="hero">
       <div>
-        <p class="kicker">A guarded path from chapter folder to author packet</p>
-        <h2>Review a whole volume without losing the evidence trail.</h2>
+        <p class="kicker">Private chapter review</p>
+        <h2>Trace each citation query to the selected draft.</h2>
       </div>
-      <p class="hero-copy">The workbench preserves every source chapter, runs Reference and Citation Integrity before Scholarly and Editorial Integrity, and packages proposed changes for human review. It never authorizes publication.</p>
+      <p class="hero-copy">Create a local Word review copy, inspect the evidence and record editorial decisions. The private workflow uses the manuscript alone. Source support requires a separate human comparison.</p>
     </section>
 
+    <form id="private-form" class="panel form-panel">
+      <h3>Review one chapter offline</h3>
+      <p>Use private, local folders outside Git and shared storage. Choose a separate output folder beside the manuscript folder.</p>
+      <label>Full path to the chapter (.docx, .md or .txt)<input name="source" required autocomplete="off" spellcheck="false"></label>
+      <button id="private-inspect" class="button secondary" type="button">Inspect selected file</button>
+      <p id="private-hash" class="path" aria-live="polite"></p>
+      <div class="two-col">
+        <label>Edition or draft identifier<input name="edition" required maxlength="160" autocomplete="off"></label>
+        <label>Editor or case owner<input name="owner" required maxlength="160" autocomplete="off"></label>
+      </div>
+      <label>Full path to an existing private output folder<input name="output" required autocomplete="off" spellcheck="false"></label>
+      <button id="private-build" class="button primary" type="submit" disabled>Build offline Word packet</button>
+      <p id="private-result" role="status"></p>
+    </form>
+    <details class="panel">
+      <summary><strong>Provider-assisted batch review</strong> · requires separate authorization for the manuscript</summary>
     <section class="workspace-grid">
       <form id="run-form" class="panel form-panel">
         <div class="section-heading">
@@ -148,6 +164,7 @@
         </section>
       </aside>
     </section>
+    </details>
   </main>
 
   <footer><span>University Press Workbench v0.1</span><span>Human editorial acceptance remains required</span></footer>

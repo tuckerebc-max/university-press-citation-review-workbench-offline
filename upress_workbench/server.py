@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from . import config
+from .offline import build_private_review, select_source
 from .pipeline import RunManager
 from .review import load_skill_policy
 from .security import SafetyError, scrub_message
@@ -158,6 +159,17 @@ class Handler(BaseHTTPRequestHandler):
         path = urllib.parse.urlsplit(self.path).path
         try:
             body = self._body()
+            if path == "/api/private/inspect":
+                source = select_source(str(body.get("source") or ""))
+                self._json({"sha256": source.sha256, "size_bytes": source.size})
+                return
+            if path == "/api/private/review":
+                fields = ("source", "output", "sha256", "edition", "owner")
+                if any(not isinstance(body.get(field), str) for field in fields):
+                    raise SafetyError("Select a source and supply an output folder, hash, edition and owner.")
+                folder = build_private_review(*(body[field] for field in fields))
+                self._json({"output_folder": str(folder), "status": "pending_human_review"}, HTTPStatus.CREATED)
+                return
             if path == "/api/scan":
                 self._json(self.server.manager.scan(str(body.get("input_root") or "")))
                 return
