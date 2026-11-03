@@ -210,6 +210,8 @@ def _check_word_xml(root) -> None:
         if not isinstance(element.tag, str):
             continue
         name = etree.QName(element)
+        if name.namespace == "http://www.w3.org/2000/svg":
+            raise SafetyError("DOCX contains SVG content; convert it to a local raster image before review.")
         if name.namespace not in _WORD_NAMESPACES:
             continue
         if name.localname in {"altChunk", "object", "control", "subDoc", "mailMerge"}:
@@ -308,7 +310,7 @@ def _check_content_types(root) -> tuple[set[str], set[str]]:
                 xml_parts.add(urllib.parse.unquote(key).lstrip("/"))
             else:
                 xml_extensions.add(key.casefold())
-        if any(token in content for token in ("macroenabled", "vbaproject", "activex", "oleobject", "ms-office.package", "text/html", "application/xhtml")):
+        if any(token in content for token in ("macroenabled", "vbaproject", "activex", "oleobject", "ms-office.package", "text/html", "application/xhtml", "image/svg")):
             raise SafetyError("DOCX contains active or imported content types.")
 
     return xml_parts, xml_extensions
@@ -331,6 +333,8 @@ def validate_docx_archive(path: Path) -> None:
                 if normalized.startswith("/") or ".." in parts or "." in parts or "//" in normalized:
                     raise SafetyError("DOCX contains an unsafe archive path.")
                 folded = normalized.casefold()
+                if folded.endswith(".svg"):
+                    raise SafetyError("DOCX contains SVG images; convert them to local raster images before review.")
                 if folded in names:
                     raise SafetyError("DOCX contains duplicate archive member names.")
                 names.add(folded)
@@ -354,8 +358,12 @@ def validate_docx_archive(path: Path) -> None:
             xml_parts, xml_extensions = _check_content_types(content_types)
             for item in members:
                 xml_name = item.filename.replace("\\", "/")
-                if xml_name.casefold().endswith((".xml", ".rels")) or xml_name in xml_parts or xml_name.rsplit(".", 1)[-1].casefold() in xml_extensions:
-                    root = _docx_xml(archive.read(item))
+                payload = archive.read(item)
+                # An XML image can be mislabeled as PNG/JPEG in both its name and MIME.
+                # Inspect XML signatures independently of those attacker-controlled labels.
+                xml_signature = payload.lstrip().startswith((b"<", b"\xef\xbb\xbf", b"\xff\xfe", b"\xfe\xff", b"\x00\x00\xfe\xff"))
+                if xml_name.casefold().endswith((".xml", ".rels")) or xml_name in xml_parts or xml_name.rsplit(".", 1)[-1].casefold() in xml_extensions or xml_signature:
+                    root = _docx_xml(payload)
                     if xml_name.casefold().endswith(".rels"):
                         _check_relationships(root, xml_name)
                     elif xml_name == "[Content_Types].xml":

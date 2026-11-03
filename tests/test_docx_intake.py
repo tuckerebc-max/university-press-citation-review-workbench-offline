@@ -93,6 +93,27 @@ class DocxIntakeTests(unittest.TestCase):
             with self.assertRaises(SafetyError):
                 validate_docx_archive(path)
 
+    def test_svg_with_remote_image_rejected(self):
+        svg = '<svg xmlns="http://www.w3.org/2000/svg"><image href="https://example.invalid/remote.png"/></svg>'
+        self.reject(extra={"word/media/image.svg": svg}, types='<Default Extension="svg" ContentType="image/svg+xml"/>')
+        self.reject(extra={"word/media/image.bin": svg}, types='<Override PartName="/word/media/image.bin" ContentType="image/svg+xml"/>')
+        self.reject(extra={"word/media/image.png": svg}, types='<Default Extension="png" ContentType="image/png"/>')
+
+    def test_local_png_photo_document_allowed(self):
+        import base64
+
+        from docx import Document
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            image = root / "local.png"
+            image.write_bytes(base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII="))
+            document = Document()
+            document.add_picture(str(image))
+            path = root / "photo.docx"
+            document.save(path)
+            validate_docx_archive(path)
+
     def test_unbalanced_and_unknown_fields_rejected(self):
         self.reject(body="<w:p><w:r><w:instrText>DDEAUTO</w:instrText></w:r></w:p>")
         self.reject(body='<w:p><w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText>PAGE</w:instrText></w:r></w:p>')

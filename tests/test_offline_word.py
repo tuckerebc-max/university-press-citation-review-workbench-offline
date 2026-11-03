@@ -9,7 +9,7 @@ from docx import Document
 from lxml import etree
 
 from upress_workbench.ingest import extract_chapter
-from upress_workbench.offline_export import export_offline_author_packet
+from upress_workbench.offline_export import _exact_runs, export_offline_author_packet
 from upress_workbench.security import SourceFile, sha256_file
 
 NS = {"w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main"}
@@ -109,6 +109,51 @@ class OfflineWordTests(unittest.TestCase):
             receipt = export_offline_author_packet(chapter, {"deterministic_findings": [finding]}, root / "out")
             self.assertEqual(receipt["comments_added"], 0)
             self.assertEqual(receipt["appendix_items"], 1)
+
+    def test_markdown_manuscript_fields_render_as_literal_code(self):
+        from markdown_it import MarkdownIt
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            path = root / "chapter.txt"
+            path.write_text("ordinary", encoding="utf-8")
+            chapter = extract_chapter(SourceFile(path, path.name, path.stat().st_size, sha256_file(path)), "CH001")
+            attack = '<img src="https://example.invalid/tracker">\n![remote](https://example.invalid/image)\n```\n[link](javascript:alert(1))'
+            finding = {"finding_id": attack, "location": attack, "exact_text": attack, "author_query": attack}
+            export_offline_author_packet(chapter, {"deterministic_findings": [finding], "coverage_notes": [attack]}, root / "out")
+            rendered = MarkdownIt("commonmark", {"html": True}).render((root / "out" / "author-queries.md").read_text(encoding="utf-8"))
+            self.assertNotIn("<img ", rendered)
+            self.assertNotIn("<a ", rendered)
+            self.assertIn("&lt;img", rendered)
+
+    def test_text_lines_preserve_whitespace_and_multiline_fallback(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            path = root / "chapter.md"
+            text = "  indented  \n\n\tcontinued\nlast line  \n"
+            path.write_bytes(text.encode("utf-8"))
+            chapter = extract_chapter(SourceFile(path, path.name, path.stat().st_size, sha256_file(path)), "CH001")
+            finding = {"finding_id": "F001", "location": chapter.blocks[-1].locator, "exact_text": "continued", "author_query": "Review"}
+            receipt = export_offline_author_packet(chapter, {"deterministic_findings": [finding]}, root / "out")
+            doc = Document(root / "out" / "author-review.docx")
+            self.assertEqual([p.text for p in doc.paragraphs[:5]], text.split("\n"))
+            self.assertEqual(receipt["comments_added"], 0)
+
+    def test_anchor_reuses_unaffected_runs_and_preserves_attributes(self):
+        doc = Document()
+        p = doc.add_paragraph()
+        before = p.add_run("before ")
+        target = p.add_run("prefix TARGET suffix")
+        target._r.set("{http://schemas.openxmlformats.org/wordprocessingml/2006/main}rsidR", "00AA0001")
+        after = p.add_run(" after")
+        before_xml = etree.tostring(before._r)
+        after_xml = etree.tostring(after._r)
+        selected = _exact_runs(p, "TARGET")
+        self.assertEqual(etree.tostring(before._r), before_xml)
+        self.assertEqual(etree.tostring(after._r), after_xml)
+        self.assertIs(before._r.getparent(), p._p)
+        self.assertIs(after._r.getparent(), p._p)
+        self.assertEqual(selected[0]._r.get("{http://schemas.openxmlformats.org/wordprocessingml/2006/main}rsidR"), "00AA0001")
 
 
 if __name__ == "__main__":
