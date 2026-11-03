@@ -18,10 +18,10 @@ class CitationRegressionTests(unittest.TestCase):
             self.assertEqual(missing, ["Table 5"])
 
     def test_title_possessive_after_preposition_retains_author_span(self):
-        body = "Compare the editions of Rao’s *A public atlas* (2018, 4th ed.)."
+        body = "Compare the editions of Rao\u2019s *A public atlas* (2018, 4th ed.)."
         result = inventory(body, ["Rao, T. (2018). A public atlas (3rd ed.). Publisher."])
         [finding] = [f for f in result["deterministic_findings"] if f["category"] == "edition_mismatch"]
-        self.assertEqual(finding["exact_text"], "Rao’s *A public atlas* (2018, 4th ed.)")
+        self.assertEqual(finding["exact_text"], "Rao\u2019s *A public atlas* (2018, 4th ed.)")
         self.assertEqual(body[finding["char_start"]:finding["char_end"]], finding["exact_text"])
     def test_three_author_narratives_and_group_conjunction_identity(self):
         result = inventory(
