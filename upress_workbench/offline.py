@@ -78,6 +78,27 @@ def select_source(value: str | Path) -> SourceFile:
     return SourceFile(path, path.name, stat.st_size, sha256_file(path))
 
 
+def verify_packet(folder: str | Path, source_path: str | Path) -> int:
+    """Compare all issued payloads to the receipt, and the snapshot to a separately selected source."""
+    packet = private_path(folder)
+    source = select_source(source_path)
+    receipt_file = private_path(packet / "run-receipt.json")
+    receipt = json.loads(receipt_file.read_text(encoding="utf-8"))
+    snapshot = "source-snapshot" + source.path.suffix.lower()
+    issued = {name for name in _PACKET_FILES if not name.startswith("source-snapshot.") and name != "run-receipt.json"}
+    hashes = receipt.get("artifacts_sha256") if isinstance(receipt, dict) else None
+    if not isinstance(hashes, dict) or set(hashes) != issued | {snapshot}:
+        raise SafetyError("Receipt is missing or lists unexpected artifacts.")
+    if receipt.get("status") != "offline_packet_built_pending_human_review" or receipt.get("mode") != "offline_mechanical":
+        raise SafetyError("Receipt does not identify an issued offline packet.")
+    if any(value != source.sha256 for value in (receipt.get("source_sha256_before"), receipt.get("source_sha256_after"), hashes[snapshot])):
+        raise SafetyError("Selected source does not match the packet.")
+    for name, digest in hashes.items():
+        if sha256_file(private_path(packet / name)) != digest:
+            raise SafetyError(f"Issued file has changed: {name}")
+    return len(hashes)
+
+
 def _edition_and_owner(edition: str, owner: str) -> None:
     if not all(isinstance(label, str) and 0 < len(label.strip()) <= 160 for label in (edition, owner)):
         raise SafetyError("Supply an edition or draft identifier and a case owner (up to 160 characters each).")
@@ -176,6 +197,9 @@ def main(argv: list[str] | None = None) -> int:
     recovery = commands.add_parser("recover", help="List interrupted stages or discard one inactive stage")
     recovery.add_argument("--output", required=True)
     recovery.add_argument("--discard", metavar="STAGE_NAME")
+    verify = commands.add_parser("verify", help="Compare the issued packet hashes with the selected source and receipt")
+    verify.add_argument("--packet", required=True)
+    verify.add_argument("--source", required=True)
     args = parser.parse_args(argv)
     try:
         if args.command == "inspect":
@@ -183,6 +207,9 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "recover":
             for stage in recover_interrupted(args.output, args.discard):
                 print(("Discarded " if args.discard else "") + stage)
+        elif args.command == "verify":
+            count = verify_packet(args.packet, args.source)
+            print(f"Selected source matches the snapshot. All {count} recorded artifact hashes match.")
         else:
             print(build_private_review(args.source, args.output, args.sha256, args.edition, args.owner))
     except SafetyError as exc:

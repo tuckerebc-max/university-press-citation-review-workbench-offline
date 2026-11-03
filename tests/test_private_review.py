@@ -13,7 +13,7 @@ from docx import Document
 from docx.oxml.ns import qn
 
 from upress_workbench.ingest import extract_chapter
-from upress_workbench.offline import build_private_review, recover_interrupted, select_source
+from upress_workbench.offline import build_private_review, recover_interrupted, select_source, verify_packet
 from upress_workbench.private_paths import private_path
 from upress_workbench.security import SafetyError, sha256_file
 
@@ -69,6 +69,19 @@ class PrivateReviewTests(unittest.TestCase):
         second = self.run_review()
         self.assertNotEqual(first, second)
         self.assertEqual(sha256_file(first / "run-receipt.json"), digest)
+
+    def test_hash_check_rejects_changed_artifact_and_unexpected_receipt_path(self):
+        packet = self.run_review()
+        self.assertEqual(verify_packet(packet, self.source), 7)
+        (packet / "decision-ledger.json").write_text("{}", encoding="utf-8")
+        with self.assertRaisesRegex(SafetyError, "file has changed"):
+            verify_packet(packet, self.source)
+        receipt_path = packet / "run-receipt.json"
+        receipt = json.loads(receipt_path.read_text())
+        receipt["artifacts_sha256"]["../outside.txt"] = self.digest
+        receipt_path.write_text(json.dumps(receipt))
+        with self.assertRaisesRegex(SafetyError, "unexpected artifacts"):
+            verify_packet(packet, self.source)
 
     def test_failed_and_interrupted_exports_do_not_issue_partial_packets(self):
         for failure in (ValueError("bad content"), KeyboardInterrupt()):

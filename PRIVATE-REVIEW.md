@@ -37,6 +37,6 @@ Author/year, edition statements and DOI strings come from the manuscript. A cand
 
 A changed hash, refused file type, failed privacy check or unsupported Word package blocks the packet. Keep the source intact. For unsuitable Word content, prepare an explicitly identified flattened copy and inspect its new hash, or inspect the original manually.
 
-A successful run has a `PrivateReview-…` folder containing `run-receipt.json`. The receipt records both original hashes, the implementation fingerprint and SHA-256 for each issued artifact. A retry creates a fresh packet.
+A successful run has a `PrivateReview-…` folder containing `run-receipt.json`. The receipt records both original hashes, the implementation fingerprint and SHA-256 for each issued artifact. Check the seven issued files with `python -m upress_workbench.offline verify --packet "FULL_PACKET_FOLDER" --source $sourceFile`. This compares file hashes with the receipt and the snapshot with the selected source. Retain the original receipt separately if you need an independent record of issuance. A retry creates a fresh packet.
 
 Ordinary errors remove the private staging folder. A power loss or forced process exit can leave an ACL-protected `.incomplete-…` folder. List abandoned stages with `python -m upress_workbench.offline recover --output $outputFolder`. After confirming the prior process has stopped, discard one listed stage with `--discard EXACT_STAGE_NAME` on the same command. Active stages and unexpected files are preserved. A partial or unrecognized folder is never an issued review packet.
