@@ -88,6 +88,49 @@ def _rci_release(model_release: str, findings: list[dict], parser_coverage: str,
     return "ready_with_conditions"  # human release and draft policy hooks remain outside this workbench
 
 
+def _grounding_error(entry: dict, chapter: Chapter) -> str | None:
+    block = next((b for b in chapter.blocks if b.locator == entry["locator"]), None)
+    if block is None or not entry["exact_text"] or entry["exact_text"] not in block.text:
+        return "Exact manuscript excerpt was not found at the claimed locator."
+    return None
+
+
+def _unsupported_verdict(entry: dict) -> bool:
+    prose = " ".join(str(entry.get(field) or "") for field in ["reason", "comparison_or_basis", "proposed_change", "author_query", "next_action", "closure_condition"])
+    prose += " " + " ".join(e.get("relevance", "") for e in entry.get("evidence", []))
+    return bool(re.search(r"\b(?:read|inspected|consulted|retrieved|accessed)\s+(?:the\s+)?(?:full|original|complete)\s+(?:article|source|text)\b", prose, re.I)) or bool(
+        re.search(
+            r"\b(?:sources?|claims?|findings?|issues?|cases?|evidence|articles?|studies|statements?|quotes?|citations?)\s+(?:(?:has|have)\s+been\s+|(?:is|are|was|were)\s+)?(?:verified|resolved|confirmed|supported|cleared|confirms|supports)\b",
+            prose,
+            re.I,
+        )
+    )
+
+
+def _guard_rci_evidence(entry: dict, chapter: Chapter, inventory: dict, candidates: list[dict]) -> str | None:
+    blocks = {b.locator for b in chapter.blocks}
+    refs = {r["reference_id"]: r for r in inventory["references"]}
+    providers = {f"CROSSREF-{c['doi']}": c for c in candidates if c.get("status", "").startswith("candidate_")}
+    for record in entry["evidence"]:
+        source = record["source_id"]
+        locators = re.split(r"\s+and\s+|;\s*", record["locator"])
+        if source == f"MANUSCRIPT-{chapter.chapter_id}" and all(loc in blocks for loc in locators):
+            record["access_status"] = "available"
+            record["retrieved_at"] = None  # local extraction is not a new retrieval
+        elif source in refs and record["locator"] == refs[source]["location"]:
+            record["access_status"] = "available"
+            record["retrieved_at"] = None
+        elif source in providers and record["locator"] == providers[source].get("provider_locator"):
+            record["access_status"] = "candidate_provider_metadata"
+            record["retrieved_at"] = providers[source].get("queried_at")
+        elif record["access_status"] in {"available", "candidate_provider_metadata"}:
+            return "Claimed available evidence is absent from the machine-controlled input provenance."
+        else:
+            record["access_status"] = "source_unavailable"
+            record["retrieved_at"] = None
+    return None
+
+
 def run_rci(
     client: LunaRouteClient,
     policy: SkillPolicy,
@@ -116,47 +159,59 @@ def run_rci(
     completed = utc_now()
     findings = []
     policy_adjustments = []
+    quarantined = []
     for index, item in enumerate(model_result["findings"], 1):
         entry = copy.deepcopy(item)
-        available = any(e["access_status"] == "available" for e in entry["evidence"])
-        if entry["status"] == "verified" and not available:
+        error = _grounding_error(entry, chapter) or _guard_rci_evidence(entry, chapter, inventory, crossref_records)
+        if error or entry["action"] == "CLOSE" or _unsupported_verdict(entry):
+            quarantined.append(
+                {"finding": index, "reason": error or "Model closure or positive source verdict is not established by the allowed inputs.", "model_finding": copy.deepcopy(item)}
+            )
+            continue
+        if entry["status"] == "verified":
             entry["status"] = "needs_review"
             entry["action"] = "FLAG"
             item["status"] = entry["status"]
             item["action"] = entry["action"]
-            policy_adjustments.append({"finding": index, "reason": "source-unavailable finding could not remain verified"})
+            policy_adjustments.append({"finding": index, "reason": "Provider assertions cannot establish verification; retained as a grounded proposal."})
         evidence = []
         for evidence_index, record in enumerate(entry["evidence"], 1):
-            evidence.append({
-                "evidence_id": f"E-RCI-{chapter.chapter_id}-{index:03d}-{evidence_index:02d}",
-                "source_id": record["source_id"],
-                "locator": record["locator"],
-                "retrieved_at": completed if record["access_status"] in {"available", "candidate_provider_metadata"} else None,
-                "relevance": f"{record['relevance']} [access={record['access_status']}]",
-            })
+            evidence.append(
+                {
+                    "evidence_id": f"E-RCI-{chapter.chapter_id}-{index:03d}-{evidence_index:02d}",
+                    "source_id": record["source_id"],
+                    "locator": record["locator"],
+                    "retrieved_at": record["retrieved_at"],
+                    "relevance": f"{record['relevance']} [access={record['access_status']}]",
+                }
+            )
         finding_id = f"RCI-{chapter.chapter_id}-{index:03d}"
-        findings.append({
-            "finding_id": finding_id,
-            "skill_id": entry["skill_id"],
-            "rule_id": entry["rule_id"],
-            "severity": entry["severity"],
-            "status": entry["status"],
-            "action": entry["action"],
-            "confidence": entry["confidence"],
-            "location": {"file": chapter.relative_path, "locator": entry["locator"], "context_type": entry["context_type"]},
-            "observed": {"raw_text": entry["exact_text"], "normalized_value": None, "source_record_id": None},
-            "expected": {"value": entry["proposed_change"], "rule_profile": project_profile} if entry["proposed_change"] else None,
-            "evidence": evidence,
-            "provenance": {"source_of_record": "supplied manuscript and recorded candidate metadata", "retrievals": crossref_records},
-            "reason": entry["reason"],
-            "proposed_change": entry["proposed_change"],
-            "dependencies": entry["dependencies"],
-            "human_decision": None,
-            "decision_log_id": None,
-        })
+        findings.append(
+            {
+                "finding_id": finding_id,
+                "skill_id": entry["skill_id"],
+                "rule_id": entry["rule_id"],
+                "severity": entry["severity"],
+                "status": entry["status"],
+                "action": entry["action"],
+                "confidence": entry["confidence"],
+                "location": {"file": chapter.relative_path, "locator": entry["locator"], "context_type": entry["context_type"]},
+                "observed": {"raw_text": entry["exact_text"], "normalized_value": None, "source_record_id": None},
+                "expected": {"value": entry["proposed_change"], "rule_profile": project_profile} if entry["proposed_change"] else None,
+                "evidence": evidence,
+                "provenance": {"source_of_record": "supplied manuscript and recorded candidate metadata", "retrievals": crossref_records},
+                "reason": entry["reason"],
+                "proposed_change": entry["proposed_change"],
+                "dependencies": entry["dependencies"],
+                "human_decision": None,
+                "decision_log_id": None,
+            }
+        )
         item["finding_id"] = finding_id
     unresolved_links = len(inventory["unmatched_citation_ids"]) + sum(1 for row in inventory["ledger_entries"] if row["relationship_status"] != "matched")
     release = _rci_release(model_result["release_status"], model_result["findings"], inventory["parser_coverage"], unresolved_links)
+    if quarantined:
+        release = "not_ready"
     result = {
         "run_id": f"MWM-RCI-{chapter.chapter_id}",
         "specification_id": "MWM-RCI-SPEC",
@@ -185,12 +240,22 @@ def run_rci(
         "ledger_entries": inventory["ledger_entries"],
         "decision_records": [],
     }
-    workbench = {"model_result": model_result, "model_usage": usage, "policy_adjustments": policy_adjustments, "author_notes": model_result["author_notes"]}
+    workbench = {
+        "model_result": model_result,
+        "model_usage": usage,
+        "policy_adjustments": policy_adjustments,
+        "author_notes": model_result["author_notes"],
+        "quarantined_findings": quarantined,
+        "grounded_finding_ids": [f["finding_id"] for f in findings],
+    }
     return result, workbench
 
 
 def _sei_release(model_release: str, findings: list[dict[str, Any]], preconditions: str) -> str:
-    if preconditions != "pass" or any(item["risk_level"] in {"high", "critical"} or item["release_effect"] in {"hold", "block"} or item["status"] in {"source_unavailable", "blocked", "disputed"} for item in findings):
+    if preconditions != "pass" or any(
+        item["risk_level"] in {"high", "critical"} or item["release_effect"] in {"hold", "block"} or item["status"] in {"source_unavailable", "blocked", "disputed"}
+        for item in findings
+    ):
         return "not_ready"
     if findings or model_release != "ready":
         return "ready_with_conditions"
@@ -221,6 +286,7 @@ def run_sei(
     now = utc_now()
     findings = []
     policy_adjustments = []
+    quarantined = []
     model_result["review_summary"], summary_terms = _neutralize(model_result["review_summary"])
     if summary_terms:
         policy_adjustments.append({"field": "review_summary", "formal_terms_neutralized": sorted(set(summary_terms))})
@@ -230,73 +296,95 @@ def run_sei(
             policy_adjustments.append({"field": f"author_notes[{note_index}]", "formal_terms_neutralized": sorted(set(note_terms))})
     for index, item in enumerate(model_result["findings"], 1):
         entry = copy.deepcopy(item)
-        for field in ["exact_text", "comparison_or_basis", "reason", "next_action", "closure_condition", "proposed_change", "author_query"]:
+        error = _grounding_error(entry, chapter)
+        if error or entry["status"] in {"verified", "supported_with_scope", "resolved"} or _unsupported_verdict(entry):
+            quarantined.append(
+                {
+                    "finding": index,
+                    "reason": error or "No source contents or human closure decision were supplied; positive scholarly/closure verdict quarantined.",
+                    "model_finding": copy.deepcopy(item),
+                }
+            )
+            continue
+        actual_access = "local" if entry["source_or_record"] == f"MANUSCRIPT-{chapter.chapter_id}" else "inaccessible"
+        if entry["source_access_status"] != actual_access:
+            policy_adjustments.append({"finding": index, "reason": "Source access derived from machine-controlled inputs; metadata is not full source access."})
+        entry["source_access_status"] = actual_access
+        item["source_access_status"] = actual_access
+        for field in ["comparison_or_basis", "reason", "next_action", "closure_condition", "proposed_change", "author_query"]:
             if entry.get(field):
                 entry[field], terms = _neutralize(entry[field])
                 item[field] = entry[field]
                 if terms:
                     policy_adjustments.append({"finding": index, "field": field, "formal_terms_neutralized": sorted(set(terms))})
-                    entry["status"] = "signal"
                     entry["escalation"] = "editor" if entry["escalation"] == "none" else entry["escalation"]
                     item["status"] = entry["status"]
                     item["escalation"] = entry["escalation"]
         finding_id = f"SEI-{chapter.chapter_id}-{index:03d}"
-        findings.append({
-            "finding_id": finding_id,
-            "skill_id": entry["skill_id"],
-            "chapter_id": chapter.chapter_id,
-            "version_id": chapter.sha256[:12],
-            "stage": "review",
-            "status": entry["status"],
-            "risk_level": entry["risk_level"],
-            "exact_text": entry["exact_text"],
-            "location": {"locator": entry["locator"], "context_type": entry["context_type"], "page": None},
-            "claim_or_object": entry["claim_or_object"],
-            "source_or_record": entry["source_or_record"],
-            "source_access_status": entry["source_access_status"],
-            "comparison_or_basis": entry["comparison_or_basis"],
-            "authority": entry["authority"],
-            "reason": entry["reason"],
-            "owner": entry["owner"] or case_owner,
-            "next_action": entry["next_action"],
-            "confidence": entry["confidence"],
-            "escalation": entry["escalation"],
-            "response": None,
-            "closure_condition": entry["closure_condition"],
-            "created_at": now,
-            "updated_at": now,
-            "release_effect": entry["release_effect"],
-            "dependencies": entry["dependencies"],
-            "formal_term_authorization": None,
-        })
+        findings.append(
+            {
+                "finding_id": finding_id,
+                "skill_id": entry["skill_id"],
+                "chapter_id": chapter.chapter_id,
+                "version_id": chapter.sha256[:12],
+                "stage": "review",
+                "status": entry["status"],
+                "risk_level": entry["risk_level"],
+                "exact_text": entry["exact_text"],
+                "location": {"locator": entry["locator"], "context_type": entry["context_type"], "page": None},
+                "claim_or_object": entry["claim_or_object"],
+                "source_or_record": entry["source_or_record"],
+                "source_access_status": entry["source_access_status"],
+                "comparison_or_basis": entry["comparison_or_basis"],
+                "authority": entry["authority"],
+                "reason": entry["reason"],
+                "owner": entry["owner"] or case_owner,
+                "next_action": entry["next_action"],
+                "confidence": entry["confidence"],
+                "escalation": entry["escalation"],
+                "response": None,
+                "closure_condition": entry["closure_condition"],
+                "created_at": now,
+                "updated_at": now,
+                "release_effect": entry["release_effect"],
+                "dependencies": entry["dependencies"],
+                "formal_term_authorization": None,
+            }
+        )
         item["finding_id"] = finding_id
     preconditions = "pass" if case_owner and citation_graph == "complete" else "partial"
     release = _sei_release(model_result["release_status"], findings, preconditions)
-    source_records = [{
-        "source_id": f"MANUSCRIPT-{chapter.chapter_id}",
-        "access_status": "local",
-        "locator": chapter.relative_path,
-        "queried_at": now,
-        "method": "local deterministic extraction",
-        "version_or_status": chapter.sha256,
-        "status_notice_locator": None,
-        "confidentiality_status": "approved",
-        "source_owner": None,
-        "notes": "Source was read locally and preserved unchanged.",
-    }]
-    for candidate in crossref_records:
-        source_records.append({
-            "source_id": f"CROSSREF-{candidate['doi']}",
-            "access_status": "live" if candidate["status"].startswith("candidate_") else "inaccessible",
-            "locator": candidate.get("provider_locator") or "https://api.crossref.org/",
-            "queried_at": candidate.get("queried_at"),
-            "method": "fixed-host Crossref DOI lookup",
-            "version_or_status": candidate["status"],
+    if quarantined:
+        release = "not_ready"
+    source_records = [
+        {
+            "source_id": f"MANUSCRIPT-{chapter.chapter_id}",
+            "access_status": "local",
+            "locator": chapter.relative_path,
+            "queried_at": now,
+            "method": "local deterministic extraction",
+            "version_or_status": chapter.sha256,
             "status_notice_locator": None,
-            "confidentiality_status": "not_applicable",
-            "source_owner": "Crossref",
-            "notes": "Candidate metadata only; not a source identity verdict.",
-        })
+            "confidentiality_status": "approved",
+            "source_owner": None,
+            "notes": "Source was read locally and preserved unchanged.",
+        }
+    ]
+    for candidate in crossref_records:
+        source_records.append(
+            {
+                "source_id": f"CROSSREF-{candidate['doi']}",
+                "access_status": "live" if candidate["status"].startswith("candidate_") else "inaccessible",
+                "locator": candidate.get("provider_locator") or "https://api.crossref.org/",
+                "queried_at": candidate.get("queried_at"),
+                "method": "fixed-host Crossref DOI lookup",
+                "version_or_status": candidate["status"],
+                "status_notice_locator": None,
+                "confidentiality_status": "not_applicable",
+                "source_owner": "Crossref",
+                "notes": "Candidate metadata only; not a source identity verdict.",
+            }
+        )
     dependencies = []
     for item in findings:
         if item["escalation"] != "none":
@@ -327,25 +415,34 @@ def run_sei(
         "source_access_records": source_records,
         "disclosure_records": [],
         "contributor_records": [],
-        "ai_events": [{
-            "event_id": f"AI-SEI-{chapter.chapter_id}",
-            "tool_name": "LunaRoute",
-            "tool_version": client.model,
-            "date": now,
-            "purpose": "Scholarly and editorial integrity review proposal",
-            "material_scope": f"Chapter {chapter.relative_path}",
-            "authorization_status": "approved",
-            "confidentiality_status": "safe" if classification in {"public", "unpublished_approved"} else "unknown",
-            "output_treatment": "unknown",
-            "human_reviewer": None,
-            "disclosure_status": "unknown",
-            "incident_status": "none",
-            "evidence_locator": f"run manifest for {chapter.chapter_id}",
-        }],
+        "ai_events": [
+            {
+                "event_id": f"AI-SEI-{chapter.chapter_id}",
+                "tool_name": "LunaRoute",
+                "tool_version": client.model,
+                "date": now,
+                "purpose": "Scholarly and editorial integrity review proposal",
+                "material_scope": f"Chapter {chapter.relative_path}",
+                "authorization_status": "approved",
+                "confidentiality_status": "safe" if classification in {"public", "unpublished_approved"} else "unknown",
+                "output_treatment": "unknown",
+                "human_reviewer": None,
+                "disclosure_status": "unknown",
+                "incident_status": "none",
+                "evidence_locator": f"run manifest for {chapter.chapter_id}",
+            }
+        ],
         "handoff_dependencies": dependencies,
         "ledger_id": None,
     }
-    workbench = {"model_result": model_result, "model_usage": usage, "policy_adjustments": policy_adjustments, "author_notes": model_result["author_notes"]}
+    workbench = {
+        "model_result": model_result,
+        "model_usage": usage,
+        "policy_adjustments": policy_adjustments,
+        "author_notes": model_result["author_notes"],
+        "quarantined_findings": quarantined,
+        "grounded_finding_ids": [f["finding_id"] for f in findings],
+    }
     return result, workbench
 
 
@@ -355,6 +452,9 @@ def author_items(rci_result: dict[str, Any], rci_workbench: dict[str, Any], sei_
     items = []
     for family, result, raw in [("RCI", rci_result, rci_raw), ("SEI", sei_result, sei_raw)]:
         for finding in result["findings"]:
+            workbench = rci_workbench if family == "RCI" else sei_workbench
+            if finding["finding_id"] not in workbench.get("grounded_finding_ids", []):
+                continue
             model_item = raw.get(finding["finding_id"], {})
             locator = finding["location"]["locator"]
             reason = finding["reason"]
@@ -364,16 +464,18 @@ def author_items(rci_result: dict[str, Any], rci_workbench: dict[str, Any], sei_
                 query = finding["next_action"]
             if not proposed and not query:
                 query = "Please review this item with the editor and confirm the intended citation or source record."
-            items.append({
-                "id": finding["finding_id"],
-                "family": family,
-                "locator": locator,
-                "severity": finding["severity"] if family == "RCI" else finding["risk_level"],
-                "status": finding["status"],
-                "exact_text": finding["observed"]["raw_text"] if family == "RCI" else finding["exact_text"],
-                "reason": reason,
-                "proposed_change": proposed,
-                "author_query": query,
-                "release_effect": "block" if family == "RCI" and finding["action"] == "BLOCK" else (finding.get("release_effect") or "track"),
-            })
+            items.append(
+                {
+                    "id": finding["finding_id"],
+                    "family": family,
+                    "locator": locator,
+                    "severity": finding["severity"] if family == "RCI" else finding["risk_level"],
+                    "status": finding["status"],
+                    "exact_text": finding["observed"]["raw_text"] if family == "RCI" else finding["exact_text"],
+                    "reason": reason,
+                    "proposed_change": proposed,
+                    "author_query": query,
+                    "release_effect": "block" if family == "RCI" and finding["action"] == "BLOCK" else (finding.get("release_effect") or "track"),
+                }
+            )
     return items
