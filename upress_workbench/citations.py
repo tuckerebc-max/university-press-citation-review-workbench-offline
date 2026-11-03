@@ -6,12 +6,14 @@ from typing import Any
 from urllib.parse import unquote
 
 from .ingest import Chapter
+from .security import SafetyError
 
 YEAR_RE = re.compile(r"\b((?:1[5-9]|20)\d{2}[a-z]?|n\.\s*d\.)(?!\w)", re.IGNORECASE)
 DOI_RE = re.compile(r"\b10\.\d{4,9}/[^\s<>\"]+", re.IGNORECASE)
 EDITION_RE = re.compile(r"\b(\d+)(?:st|nd|rd|th)?\s*(?:ed\.|edition\b)", re.I)
 TARGET_RE = re.compile(r"\b(Figure|Table)\s+(\d+(?:\.\d+)*[a-z]?)\b", re.I)
 CAPTION_RE = re.compile(r"^\s*(Figure|Table)\s+(\d+(?:\.\d+)*[a-z]?)\s*[.:\u2014-]\s+\S", re.I | re.M)
+NUMERIC_RE = re.compile(r"\[\d+(?:\s*[,\u2013-]\s*\d+)*\]")
 
 
 def _normalized(value: str) -> str:
@@ -22,7 +24,7 @@ def _normalized(value: str) -> str:
 
 def _first_author(value: str) -> str:
     value = re.sub(r"\bet\s+al\.?", "", value, flags=re.IGNORECASE).strip()
-    value = re.split(r"[,&;]|\s+and\s+", value, maxsplit=1, flags=re.I)[0]
+    value = re.split(r"[,;]", value, maxsplit=1)[0]
     tokens = _normalized(value).split()
     return " ".join(tokens)
 
@@ -43,6 +45,8 @@ def _findings(chapter: Chapter, citations: list[dict], references: list[dict]) -
     findings = []
     blocks = {b.locator: b for b in chapter.blocks}
     reference_by_id = {r["reference_id"]: r for r in references}
+    numeric_coverage = any(NUMERIC_RE.search(b.text) for b in chapter.blocks if not b.in_references)
+    reference_inventory_unavailable = not references and any("no explicit" in note.casefold() and "heading" in note.casefold() for note in chapter.coverage_notes)
     captions: dict[tuple[str, str], list[str]] = {}
     for block in chapter.blocks:
         if not block.in_references:
@@ -87,7 +91,16 @@ def _findings(chapter: Chapter, citations: list[dict], references: list[dict]) -
 
     for citation in citations:
         candidates = citation["candidate_reference_ids"]
-        if not candidates:
+        if citation.get("title_identity_uncertain"):
+            add(
+                "edition_identity_uncertainty",
+                citation,
+                "Please identify the reference and edition intended by this possessive author/title/date expression. Its title/author identity was not reliably established automatically; compare the source consulted with the reference edition.",
+                [citation["citation_id"]],
+                candidates,
+            )
+            continue
+        if not candidates and not reference_inventory_unavailable:
             add(
                 "missing_reference",
                 citation,
@@ -112,7 +125,7 @@ def _findings(chapter: Chapter, citations: list[dict], references: list[dict]) -
         block = blocks[ref["location"]]
         ref.update(paragraph_index=block.paragraph_index, char_start=0, char_end=len(block.text))
         rid = ref["reference_id"]
-        if rid not in cited:
+        if rid not in cited and not numeric_coverage:
             add(
                 "orphan_reference",
                 ref,
@@ -138,6 +151,13 @@ def _findings(chapter: Chapter, citations: list[dict], references: list[dict]) -
                 f"These references contain the same normalized DOI ({doi}). Please confirm whether they describe the same source; no external metadata was checked.",
                 reference_ids=[r["reference_id"] for r in refs],
             )
+    if reference_inventory_unavailable and citations:
+        add(
+            "reference_inventory_unavailable",
+            citations[0],
+            "No explicit reference-list heading was extracted. Please identify the reference-list boundary or supply its location before judging individual missing-reference links.",
+            [c["citation_id"] for c in citations],
+        )
     for block in chapter.blocks:
         if block.in_references:
             continue
@@ -177,7 +197,7 @@ def _findings(chapter: Chapter, citations: list[dict], references: list[dict]) -
                 {**record, "raw_text": match.group(), "char_start": match.start(), "char_end": match.end()},
                 "Please repair this broken manuscript cross-reference and confirm its target.",
             )
-        if re.search(r"\[\d+(?:\s*[,\u2013-]\s*\d+)*\]", block.text):
+        if NUMERIC_RE.search(block.text):
             add(
                 "unsupported_style",
                 record,
@@ -209,6 +229,7 @@ def _reference_record(text: str, locator: str, number: int) -> dict[str, Any]:
         "location": locator,
         "source_type": "unknown_or_ambiguous",
         "authors_or_group": [author] if author else [],
+        "personal_author_syntax": bool(re.search(r",\s*[^\W\d_]\.", author_text)),
         "date": year,
         "title": title,
         "container_title": None,
@@ -232,6 +253,7 @@ def _citation_record(raw: str, locator: str, number: int, form: str) -> dict[str
         "context_type": "body",
         "citation_form": form,
         "authors_or_group": [author] if author else [],
+        "author_expression": before.strip(" (,"),
         "year": year.group(1) if year else None,
         "edition": None,
         "locator": locator_match.group(0) if locator_match else None,
@@ -255,7 +277,8 @@ def build_inventory(chapter: Chapter) -> dict[str, Any]:
         extracted = []
         for match in re.finditer(r"\(([^()]{1,500})\)", block.text):
             inside = match.group(1)
-            for piece in inside.split(";"):
+            for piece_match in re.finditer(r"[^;]+", inside):
+                piece = piece_match.group()
                 years = list(YEAR_RE.finditer(piece))
                 if not years:
                     continue
@@ -264,21 +287,36 @@ def build_inventory(chapter: Chapter) -> dict[str, Any]:
                     continue
                 for year in years:
                     record = _citation_record(f"({author}, {year.group(0)})", block.locator, 0, "parenthetical")
-                    record["raw_text"] = match.group(0)
+                    segment_start = match.start(1) + piece_match.start() + len(piece) - len(piece.lstrip())
+                    segment_end = match.start(1) + piece_match.end() - len(piece) + len(piece.rstrip())
+                    record["raw_text"] = block.text[segment_start:segment_end]
                     locator = re.search(r"\b(?:pp?\.|para\.|chapter|table|figure)\s*\d+[\w\u2013-]*", piece, re.I)
                     record["locator"] = locator.group(0) if locator else None
                     edition = EDITION_RE.search(piece)
                     record["edition"] = edition[1] if edition else None
-                    record["char_start"], record["char_end"] = match.span()
+                    record["char_start"], record["char_end"] = segment_start, segment_end
                     extracted.append(record)
         # Narrative author strings begin at an uppercase word. Lowercase particles
         # are retained; arbitrary sentence prefixes are not treated as group names.
-        narrative = re.compile(r"(?<![\w])([^\W\d_][\w\u2019'\u2013-]*(?:\s+(?:[^\W\d_][\w\u2019'\u2013-]*|et|al\.))*)\s*$", re.UNICODE)
+        narrative = re.compile(r"(?<![\w])([^\W\d_][\w\u2019'\u2013-]*(?:,?\s+(?:[^\W\d_][\w\u2019'\u2013-]*|&|et|al\.))*)\s*$", re.UNICODE)
         for date_match in re.finditer(r"\(([^()]{1,500})\)", block.text):
             years = list(YEAR_RE.finditer(date_match.group(1)))
             if not years or date_match.group(1)[: years[0].start()].strip():
                 continue
             prefix = block.text[max(0, date_match.start() - 250) : date_match.start()]
+            possessive = re.search(r"\b([^\W\d_][\w\u2019'-]*(?:\s+[^\W\d_][\w'-]*)?)[\u2019']s\s+(.{1,160}?)\s*$", prefix)
+            if possessive and EDITION_RE.search(date_match[1]):
+                start = date_match.start() - len(prefix) + possessive.start()
+                record = _citation_record(f"{possessive[1]} ({years[0][0]})", block.locator, 0, "possessive_title")
+                record.update(
+                    raw_text=block.text[start : date_match.end()],
+                    char_start=start,
+                    char_end=date_match.end(),
+                    title_identity_uncertain=True,
+                    edition=EDITION_RE.search(date_match[1])[1],
+                )
+                extracted.append(record)
+                continue
             match = narrative.search(prefix)
             if not match:
                 continue
@@ -291,7 +329,7 @@ def build_inventory(chapter: Chapter) -> dict[str, Any]:
             # A lower-case prose token bounds the author phrase on its left.
             # Retain particles and et al. within names rather than reducing them
             # to the last token as the original parser did.
-            particles = {"van", "von", "de", "der", "del", "da", "la", "et", "al.", "and"}
+            particles = {"van", "von", "de", "der", "del", "da", "la", "et", "al.", "and", "&"}
             boundary = max((i for i, w in enumerate(words) if w[0].islower() and w.casefold() not in particles), default=-1)
             words = words[boundary + 1 :]
             if not words:
@@ -326,22 +364,37 @@ def build_inventory(chapter: Chapter) -> dict[str, Any]:
         ref_by_key.setdefault(key, []).append(ref["reference_id"])
 
     unmatched = []
+    candidate_edges = 0
     for citation in citations:
         key = ((citation["authors_or_group"] or [""])[0], _date_key(citation["year"]))
         candidates = ref_by_key.get(key, [])
+        if not candidates:
+            lead_author = _normalized(re.split(r"[,&;]|\s+and\s+", citation["author_expression"], maxsplit=1, flags=re.I)[0])
+            candidates = [rid for rid in ref_by_key.get((lead_author, key[1]), []) if references[int(rid[1:]) - 1]["personal_author_syntax"]]
         if not candidates and re.fullmatch(r"\d{4}", key[1]):
             candidates = [rid for (author, date), ids in ref_by_key.items() if author == key[0] and re.fullmatch(key[1] + "[a-z]", date) for rid in ids]
             citation["match_uncertain"] = bool(candidates)
         citation["candidate_reference_ids"] = candidates
+        candidate_edges += len(candidates)
+        if candidate_edges > 25000:
+            raise SafetyError("Local citation candidate graph exceeds 25000 links; split the chapter or manually resolve repeated ambiguous author-date records before retrying.")
         if not candidates:
             unmatched.append(citation["citation_id"])
 
     ledgers = []
     cited_reference_ids = {rid for citation in citations for rid in citation["candidate_reference_ids"]}
+    citation_by_ref: dict[str, list[dict]] = {}
+    for citation in citations:
+        for rid in citation["candidate_reference_ids"]:
+            citation_by_ref.setdefault(rid, []).append(citation)
+    numeric_coverage = any(NUMERIC_RE.search(b.text) for b in chapter.blocks if not b.in_references)
     for index, ref in enumerate(references, 1):
-        citation_ids = [c["citation_id"] for c in citations if ref["reference_id"] in c["candidate_reference_ids"]]
+        linked = citation_by_ref.get(ref["reference_id"], [])
+        citation_ids = [c["citation_id"] for c in linked]
         status = "orphan_reference" if not citation_ids else "matched"
-        if any(len(c["candidate_reference_ids"]) > 1 or c.get("match_uncertain") for c in citations if c["citation_id"] in citation_ids):
+        if not citation_ids and numeric_coverage:
+            status = "unassessed_coverage"
+        if any(len(c["candidate_reference_ids"]) > 1 or c.get("match_uncertain") for c in linked):
             status = "ambiguous_match"
         ledgers.append(
             {
@@ -368,13 +421,14 @@ def build_inventory(chapter: Chapter) -> dict[str, Any]:
         "references": references,
         "ledger_entries": ledgers,
         "unmatched_citation_ids": unmatched,
-        "orphan_reference_ids": sorted(ref["reference_id"] for ref in references if ref["reference_id"] not in cited_reference_ids),
+        "orphan_reference_ids": sorted(ref["reference_id"] for ref in references if ref["reference_id"] not in cited_reference_ids and not numeric_coverage),
         "dois": dois,
         "parser_coverage": "partial",
         "coverage_notes": [
             *chapter.coverage_notes,
             "Citation extraction is heuristic author-date parsing, not a complete style or scholarly verification. Numeric, note-only, short-title, nested citations, initials disambiguation, and group abbreviations may require manual inventory.",
             "Candidate author-year links are manuscript-local possibilities, not verified source identities. Reference entries must be segmented correctly upstream.",
+            "Organization conjunctions are retained. Multi-author fallback requires personal-author syntax in the observed reference. Possessive title/edition expressions receive manual identity queries. Numeric-style chapters suppress orphan claims because links are unassessed. Candidate graphs stop safely above 25000 links.",
             "Caption checks cover extracted Figure/Table labels with numeric or multipart numbers and explicit colon/period/dash captions within this chapter only. Other label styles, implicit external targets, images and unextracted objects require review. Edition comparisons cover explicit numeric editions only.",
         ],
         "deterministic_findings": findings,

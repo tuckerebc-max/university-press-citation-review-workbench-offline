@@ -11,6 +11,51 @@ def inventory(body, refs):
 
 
 class CitationRegressionTests(unittest.TestCase):
+    def test_three_author_narratives_and_group_conjunction_identity(self):
+        result = inventory(
+            "Smith, Jones, and Li (2020). Research and Development Council (2021).",
+            ["Smith, A., Jones, B., & Li, C. (2020). Title.", "Research and Development Council. (2021). Report."],
+        )
+        self.assertEqual([c["candidate_reference_ids"] for c in result["citations"]], [["R001"], ["R002"]])
+        self.assertEqual(result["references"][1]["authors_or_group"], ["research and development council"])
+
+    def test_grouped_findings_have_individual_source_spans(self):
+        body = "See (Smith, 2020; Jones, 2021)."
+        result = inventory(body, [])
+        self.assertEqual([f["exact_text"] for f in result["deterministic_findings"]], ["Smith, 2020", "Jones, 2021"])
+        for finding in result["deterministic_findings"]:
+            self.assertEqual(body[finding["char_start"] : finding["char_end"]], finding["exact_text"])
+
+    def test_possessive_title_edition_yields_scoped_query(self):
+        result = inventory("Smith's *A Book Title* (2020, 2nd ed.)", ["Smith, A. (2020). A Book Title (3rd ed.)."])
+        self.assertTrue(any(f["category"] == "edition_identity_uncertainty" for f in result["deterministic_findings"]))
+
+    def test_explosive_ambiguous_candidate_graph_stops_explicitly(self):
+        from upress_workbench.security import SafetyError
+
+        with self.assertRaisesRegex(SafetyError, "candidate"):
+            inventory("(Smith, 2020) " * 2000, ["Smith, A. (2020). Same title."] * 2000)
+
+    def test_numeric_style_does_not_flood_orphan_queries(self):
+        result = inventory("Sources [1\u20133].", ["Smith, A. (2020). One.", "Jones, B. (2021). Two."])
+        self.assertFalse(any(f["category"] == "orphan_reference" for f in result["deterministic_findings"]))
+        self.assertTrue(all(row["relationship_status"] == "unassessed_coverage" for row in result["ledger_entries"]))
+
+    def test_no_reference_heading_yields_inventory_query(self):
+        chapter = Chapter(
+            "CH001",
+            "",
+            "",
+            ".txt",
+            0,
+            "",
+            [Block("body.p0001", "(Smith, 2020; Jones, 2021)", "body", False, 0)],
+            "partial",
+            ["No explicit References or Bibliography heading was detected."],
+        )
+        result = build_inventory(chapter)
+        self.assertEqual([f["category"] for f in result["deterministic_findings"]], ["reference_inventory_unavailable"])
+
     def test_initials_compound_and_international_names(self):
         for author, ref in [("Smith", "Smith, J."), ("van der Waals", "van der Waals, J."), ("\u738b", "\u738b, \u5c0f\u660e"), ("O\u2019Neill", "O\u2019Neill, A.")]:
             with self.subTest(author=author):
