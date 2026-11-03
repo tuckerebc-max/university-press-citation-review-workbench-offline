@@ -43,6 +43,10 @@ class BrowserPrivateWorkflow(unittest.TestCase):
                         self.assertIn(b"offline", page)
                         self.assertIn("frame-ancestors 'none'", response.headers.get("Content-Security-Policy"))
                     route = "/api/private/inspect"
+                    for provider_route in ("/api/runs", "/api/runs/example/resume"):
+                        with self.assertRaises(urllib.error.HTTPError) as disabled:
+                            post(provider_route, {"provider_approved": True})
+                        self.assertEqual(disabled.exception.code, 400)
                     for origin, credential in (("https://untrusted.invalid", token), (endpoint, "incorrect")):
                         with self.assertRaises(urllib.error.HTTPError) as blocked:
                             post(route, {"source": str(source)}, origin, credential)

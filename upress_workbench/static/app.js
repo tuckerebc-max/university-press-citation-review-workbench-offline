@@ -49,6 +49,9 @@ async function checkHealth() {
   const node = document.getElementById("health");
   try {
     const value = await api("/api/health");
+    if (!value.provider_enabled) {
+      document.getElementById("provider-panel").hidden = true;
+    }
     const skillsReady = Object.values(value.skills).every(item => item.ready);
     const ready = value.provider_key_configured && skillsReady;
     node.textContent = ready ? "Offline ready · provider configured" : "Offline ready";

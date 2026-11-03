@@ -3,10 +3,43 @@
 from __future__ import annotations
 
 import os
+import re
 from pathlib import Path
 
 from . import config
 from .security import SafetyError, _is_reparse_point
+
+
+def require_private_directory(path: Path) -> None:
+    """Verify the newly created stage before writing any manuscript bytes."""
+    if os.name != "nt":
+        if path.stat().st_mode & 0o077:
+            raise SafetyError("The staging filesystem did not enforce private directory permissions.")
+        return
+    import ctypes
+    from ctypes import wintypes
+
+    # 0700 handling varies across Windows Python versions and filesystems.
+    # Inspect the resulting DACL rather than relying on the requested mode.
+    security = ctypes.WinDLL("advapi32", use_last_error=True)
+    size = wintypes.DWORD()
+    dacl_information = 4
+    security.GetFileSecurityW(str(path), dacl_information, None, 0, ctypes.byref(size))
+    if not size.value:
+        raise SafetyError("Cannot verify private Windows directory permissions.")
+    descriptor = ctypes.create_string_buffer(size.value)
+    if not security.GetFileSecurityW(str(path), dacl_information, descriptor, size, ctypes.byref(size)):
+        raise SafetyError("Cannot read the staging directory permissions.")
+    sddl = wintypes.LPWSTR()
+    if not security.ConvertSecurityDescriptorToStringSecurityDescriptorW(descriptor, 1, dacl_information, ctypes.byref(sddl), None):
+        raise SafetyError("Cannot verify the staging directory access list.")
+    try:
+        policy = sddl.value or ""
+        entries = re.findall(r"\(([^()]*)\)", policy)
+        if not policy.startswith("D:P") or not entries or any(e.split(";")[-1] not in {"OW", "SY", "BA"} for e in entries):
+            raise SafetyError("Use a local filesystem and a current Python runtime that enforce owner-only private folders.")
+    finally:
+        ctypes.windll.kernel32.LocalFree(ctypes.cast(sddl, ctypes.c_void_p))
 
 
 def private_path(value: str | Path) -> Path:

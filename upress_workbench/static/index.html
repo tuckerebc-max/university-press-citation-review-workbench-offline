@@ -29,18 +29,18 @@
     <form id="private-form" class="panel form-panel">
       <h3>Review one chapter offline</h3>
       <p>Use private, local folders outside Git and shared storage. Choose a separate output folder beside the manuscript folder.</p>
-      <label>Full path to the chapter (.docx, .md or .txt)<input name="source" required autocomplete="off" spellcheck="false"></label>
+      <label>Full path to the chapter (.docx, .md or .txt)<input type="text" name="source" required autocomplete="off" spellcheck="false"></label>
       <button id="private-inspect" class="button secondary" type="button">Inspect selected file</button>
       <p id="private-hash" class="path" aria-live="polite"></p>
       <div class="two-col">
-        <label>Edition or draft identifier<input name="edition" required maxlength="160" autocomplete="off"></label>
-        <label>Editor or case owner<input name="owner" required maxlength="160" autocomplete="off"></label>
+        <label>Edition or draft identifier<input type="text" name="edition" required maxlength="160" autocomplete="off"></label>
+        <label>Editor or case owner<input type="text" name="owner" required maxlength="160" autocomplete="off"></label>
       </div>
-      <label>Full path to an existing private output folder<input name="output" required autocomplete="off" spellcheck="false"></label>
+      <label>Full path to an existing private output folder<input type="text" name="output" required autocomplete="off" spellcheck="false"></label>
       <button id="private-build" class="button primary" type="submit" disabled>Build offline Word packet</button>
       <p id="private-result" role="status"></p>
     </form>
-    <details class="panel">
+    <details id="provider-panel" class="panel">
       <summary><strong>Provider-assisted batch review</strong> · requires separate authorization for the manuscript</summary>
     <section class="workspace-grid">
       <form id="run-form" class="panel form-panel">
@@ -167,7 +167,7 @@
     </details>
   </main>
 
-  <footer><span>University Press Workbench v0.1</span><span>Human editorial acceptance remains required</span></footer>
+  <footer><span>University Press Workbench · Private candidate</span><span>Human editorial acceptance remains required</span></footer>
   <script src="/app.js" defer></script>
 </body>
 </html>

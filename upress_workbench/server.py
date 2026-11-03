@@ -25,11 +25,12 @@ from .state import StateStore
 class WorkbenchServer(ThreadingHTTPServer):
     daemon_threads = True
 
-    def __init__(self, address, handler, manager: RunManager, store: StateStore, session_token: str):
+    def __init__(self, address, handler, manager: RunManager, store: StateStore, session_token: str, *, provider_enabled: bool = False):
         super().__init__(address, handler)
         self.manager = manager
         self.store = store
         self.session_token = session_token
+        self.provider_enabled = provider_enabled
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -135,7 +136,7 @@ class Handler(BaseHTTPRequestHandler):
                     skills[name] = {"ready": True, "commit": policy.commit, "version": policy.version}
                 except Exception as exc:
                     skills[name] = {"ready": False, "error": scrub_message(exc)}
-            self._json({"app": config.APP_NAME, "version": config.APP_VERSION, "provider_key_configured": bool(os.environ.get("LUNAROUTE_API_KEY", "").strip()), "model": config.DEFAULT_BATCH_MODEL, "skills": skills})
+            self._json({"app": config.APP_NAME, "version": config.APP_VERSION, "provider_enabled": self.server.provider_enabled, "provider_key_configured": self.server.provider_enabled and bool(os.environ.get("LUNAROUTE_API_KEY", "").strip()), "model": config.DEFAULT_BATCH_MODEL, "skills": skills})
             return
         if path == "/api/runs":
             self._json({"runs": self.server.store.list_runs()})
@@ -159,6 +160,8 @@ class Handler(BaseHTTPRequestHandler):
         path = urllib.parse.urlsplit(self.path).path
         try:
             body = self._body()
+            if not self.server.provider_enabled and (path == "/api/runs" or path.endswith("/resume")):
+                raise SafetyError("This session is offline. Provider-assisted review needs a separately enabled session and manuscript approval.")
             if path == "/api/private/inspect":
                 source = select_source(str(body.get("source") or ""))
                 self._json({"sha256": source.sha256, "size_bytes": source.size})
@@ -222,6 +225,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=config.APP_NAME)
     parser.add_argument("--port", type=int, default=config.DEFAULT_PORT)
     parser.add_argument("--no-browser", action="store_true")
+    parser.add_argument("--enable-provider", action="store_true", help="Allow separately approved provider-assisted batches in this desktop session")
     args = parser.parse_args(argv)
     if args.port < 1024 or args.port > 65535:
         parser.error("port must be between 1024 and 65535")
@@ -230,7 +234,7 @@ def main(argv: list[str] | None = None) -> int:
     recovered = store.recover_orphaned_runs()
     manager = RunManager(store)
     token = secrets.token_urlsafe(32)
-    server = WorkbenchServer((config.HOST, args.port), Handler, manager, store, token)
+    server = WorkbenchServer((config.HOST, args.port), Handler, manager, store, token, provider_enabled=args.enable_provider)
     url = f"http://{config.HOST}:{server.server_port}/"
     print(f"{config.APP_NAME} is running at {url}")
     if recovered:

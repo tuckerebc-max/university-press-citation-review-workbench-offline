@@ -82,3 +82,7 @@ footer { display: flex; justify-content: space-between; gap: 20px; padding: 22px
 [hidden] { display: none !important; }
 @media (max-width: 900px) { .hero, .workspace-grid { grid-template-columns: 1fr; } .hero { gap: 22px; } .two-col, .three-col { grid-template-columns: 1fr; } .health { display: none; } }
 @media (max-width: 560px) { main { padding-inline: 15px; } .form-panel { padding: 23px 18px; } .masthead { padding-inline: 16px; } footer { flex-direction: column; padding-inline: 18px; } }
+
+#private-form { margin-bottom: 24px; }
+#private-hash, #private-result { overflow-wrap: anywhere; }
+details.panel > summary { cursor: pointer; padding: 20px 28px; color: var(--navy-deep); }

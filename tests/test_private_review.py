@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import json
+import os
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -9,7 +12,7 @@ from unittest.mock import patch
 from docx import Document
 
 from upress_workbench.ingest import extract_chapter
-from upress_workbench.offline import build_private_review, select_source
+from upress_workbench.offline import build_private_review, recover_interrupted, select_source
 from upress_workbench.private_paths import private_path
 from upress_workbench.security import SafetyError, sha256_file
 
@@ -72,6 +75,38 @@ class PrivateReviewTests(unittest.TestCase):
                 self.run_review()
             self.assertEqual(list(self.output.iterdir()), [])
             self.assertEqual(sha256_file(self.source), self.digest)
+
+    def test_hard_stop_stage_can_be_identified_and_explicitly_discarded(self):
+        # Exit at the export boundary, without executing any Python finally blocks.
+        code = (
+            "import os, sys; import upress_workbench.offline as o; "
+            "o.export_offline_author_packet = lambda *args: os._exit(77); "
+            "o.build_private_review(*sys.argv[1:])"
+        )
+        proc = subprocess.run(
+            [sys.executable, "-c", code, str(self.source), str(self.output), self.digest, "v1", "Editor"],
+            check=False, timeout=30, cwd=Path(__file__).resolve().parents[1],
+        )
+        self.assertEqual(proc.returncode, 77)
+        [stage] = recover_interrupted(self.output)
+        self.assertFalse(any(p.name.startswith("PrivateReview-") for p in self.output.iterdir()))
+        marker = self.output / stage / "stage.json"
+        saved = marker.read_bytes()
+        info = json.loads(saved)
+        info["pid"] = os.getpid()
+        marker.write_text(json.dumps(info), encoding="utf-8")
+        with self.assertRaisesRegex(SafetyError, "active"):
+            recover_interrupted(self.output, stage)
+        marker.write_bytes(saved)
+        extra = self.output / stage / "keep.txt"
+        extra.write_text("Operator note", encoding="utf-8")
+        with self.assertRaisesRegex(SafetyError, "Unrecognized"):
+            recover_interrupted(self.output, stage)
+        self.assertTrue(extra.is_file())
+        extra.unlink()
+        self.assertEqual(recover_interrupted(self.output, stage), [stage])
+        self.assertEqual(list(self.output.iterdir()), [])
+        self.assertEqual(sha256_file(self.source), self.digest)
 
     def test_preselected_and_midrun_drift_block_packet(self):
         self.source.write_text("Changed", encoding="utf-8")

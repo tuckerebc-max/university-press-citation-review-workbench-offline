@@ -4,13 +4,17 @@ This Tech Triangle workbench turns a folder of chapter manuscripts into an Explo
 
 The workbench is a review and routing surface. It does not accept edits, adjudicate integrity concerns, overwrite a source, publish a manuscript, or claim that provider metadata proves source identity.
 
-## Start the workbench
+## Supervised private chapter review
+
+This separate candidate opens with a local, single-file review. Inspect the selected manuscript hash, enter the edition and case owner, then build a Word copy, evidence ledger and decision ledger. The offline workflow never requests a provider or metadata lookup. See [the private run guide](PRIVATE-REVIEW.md) for desktop and command-line instructions, limits and recovery.
+
+## Provider-assisted batch workbench
 
 1. Install Python 3.11 or newer and run `python -m pip install -r requirements.txt`. Codex users can skip this because the launcher finds the bundled Python runtime.
-2. Confirm that `LUNAROUTE_API_KEY` is stored as a Windows user environment variable. Never paste the key into this repository, a chapter folder, or a command you intend to save.
-3. Double-click `Start-Workbench.ps1`, or right-click it and choose **Run with PowerShell**.
+2. For the provider-assisted batch lane, confirm that `LUNAROUTE_API_KEY` is stored as a Windows user environment variable. Never paste the key into this repository, a chapter folder, or a command you intend to save.
+3. For a separately authorized provider session, run `.\Start-Workbench.ps1 -EnableProvider`. The default desktop session only builds offline packets.
 4. The workbench opens at `http://127.0.0.1:8765/`.
-5. Enter the chapter folder and a separate output parent folder.
+5. Expand **Provider-assisted batch review**, then enter the chapter folder and a separate output parent folder.
 6. Scan the source set, name the editor or case owner, choose the classification, and affirm that LunaRoute is approved for the complete manifest.
 7. Start the run. Keep the PowerShell window open until the run finishes.
 8. Choose **Open output folder**. Start with `00_OPEN_RUN_SUMMARY.html`, then open each chapter's `author-review` folder.
