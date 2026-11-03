@@ -11,6 +11,18 @@ def inventory(body, refs):
 
 
 class CitationRegressionTests(unittest.TestCase):
+    def test_caption_with_markdown_emphasis_matches_only_local_target(self):
+        for caption in ("**Table 4.** Result", "__Table 4__: Result", "### Table 4: Result"):
+            result = inventory(f"See Table 4 and Table 5.\n{caption}", [])
+            missing = [f["exact_text"] for f in result["deterministic_findings"] if f["category"] == "cross_reference_missing_target"]
+            self.assertEqual(missing, ["Table 5"])
+
+    def test_title_possessive_after_preposition_retains_author_span(self):
+        body = "Compare the editions of Rao’s *A public atlas* (2018, 4th ed.)."
+        result = inventory(body, ["Rao, T. (2018). A public atlas (3rd ed.). Publisher."])
+        [finding] = [f for f in result["deterministic_findings"] if f["category"] == "edition_mismatch"]
+        self.assertEqual(finding["exact_text"], "Rao’s *A public atlas* (2018, 4th ed.)")
+        self.assertEqual(body[finding["char_start"]:finding["char_end"]], finding["exact_text"])
     def test_three_author_narratives_and_group_conjunction_identity(self):
         result = inventory(
             "Smith, Jones, and Li (2020). Research and Development Council (2021).",

@@ -12,7 +12,7 @@ YEAR_RE = re.compile(r"\b((?:1[5-9]|20)\d{2}[a-z]?|n\.\s*d\.)(?!\w)", re.IGNOREC
 DOI_RE = re.compile(r"\b10\.\d{4,9}/[^\s<>\"]+", re.IGNORECASE)
 EDITION_RE = re.compile(r"\b(\d+)(?:st|nd|rd|th)?\s*(?:ed\.|edition\b)", re.I)
 TARGET_RE = re.compile(r"\b(Figure|Table)\s+(\d+(?:\.\d+)*[a-z]?)\b", re.I)
-CAPTION_RE = re.compile(r"^\s*(Figure|Table)\s+(\d+(?:\.\d+)*[a-z]?)\s*[.:\u2014-]\s+\S", re.I | re.M)
+CAPTION_RE = re.compile(r"^[ \t]*(?:#{1,6}[ \t]+)?[*_]{0,2}(Figure|Table)\s+(\d+(?:\.\d+)*[a-z]?)[*_]{0,2}\s*[.:\u2014-][*_]{0,2}[ \t]+\S", re.I | re.M)
 NUMERIC_RE = re.compile(r"\[\d+(?:\s*[,\u2013-]\s*\d+)*\]")
 
 
@@ -314,7 +314,12 @@ def build_inventory(chapter: Chapter) -> dict[str, Any]:
             possessive = re.search(r"\b([^\W\d_][\w\u2019'-]*(?:\s+[^\W\d_][\w'-]*)?)[\u2019']s\s+(.{1,160}?)\s*$", prefix)
             if possessive and EDITION_RE.search(date_match[1]):
                 start = date_match.start() - len(prefix) + possessive.start()
-                record = _citation_record(f"{possessive[1]} ({years[0][0]})", block.locator, 0, "possessive_title")
+                author = possessive[1]
+                parts = author.split()
+                if len(parts) > 1 and parts[0].casefold() in {"of", "in", "from", "with", "by", "see", "consult", "compare"}:
+                    start += author.index(parts[1], len(parts[0]))
+                    author = parts[1]
+                record = _citation_record(f"{author} ({years[0][0]})", block.locator, 0, "possessive_title")
                 record.update(
                     raw_text=block.text[start : date_match.end()],
                     char_start=start,
