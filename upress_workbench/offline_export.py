@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import textwrap
 from copy import deepcopy
 from io import BytesIO
 from pathlib import Path
@@ -10,6 +11,7 @@ from typing import Any
 
 from docx import Document
 from docx.oxml.ns import qn
+from docx.shared import Pt, RGBColor
 from docx.text.run import Run
 
 from .artifacts import atomic_write_bytes
@@ -21,6 +23,18 @@ NOTICE = (
     "No source articles, live metadata, or external links were accessed. "
     "All queries require human review; no edits are accepted and publication is not authorized."
 )
+_QUERY_LABELS = {
+    "missing_reference": "Identify the reference",
+    "ambiguous_match": "Confirm the intended reference",
+    "orphan_reference": "Confirm whether this reference is cited",
+    "duplicate_doi": "Check records sharing a DOI",
+    "edition_mismatch": "Confirm the edition",
+    "edition_version_uncertainty": "Confirm the edition or version",
+    "edition_identity_uncertainty": "Identify the cited edition",
+    "cross_reference_missing_target": "Identify the figure or table target",
+    "cross_reference_ambiguous_target": "Confirm the figure or table target",
+    "missing_citation_marker": "Complete the citation marker",
+}
 
 
 def _exact_runs(paragraph, exact: str):
@@ -79,7 +93,21 @@ def _literal_markdown(text: str) -> str:
     """Fence untrusted text with a delimiter it cannot close."""
     longest = max((len(match.group()) for match in re.finditer(r"`+", text)), default=0)
     fence = "`" * max(3, longest + 1)
-    return fence + "\n" + text + ("" if text.endswith("\n") else "\n") + fence
+    wrapped = "\n".join("\n".join(textwrap.wrap(line, width=88, replace_whitespace=False, drop_whitespace=False)) for line in text.split("\n"))
+    return fence + "\n" + wrapped + ("" if wrapped.endswith("\n") else "\n") + fence
+
+
+def _review_paragraph(document, text: str, *, size=10, keep_next=False, bold=False):
+    paragraph = document.add_paragraph()
+    paragraph.paragraph_format.space_before = Pt(0)
+    paragraph.paragraph_format.space_after = Pt(4)
+    paragraph.paragraph_format.keep_together = True
+    paragraph.paragraph_format.keep_with_next = keep_next
+    run = paragraph.add_run(text)
+    run.font.size = Pt(size)
+    run.font.color.rgb = RGBColor(0, 0, 0)
+    run.bold = bold
+    return paragraph
 
 
 def _text_document(payload: bytes, chapter: Chapter):
@@ -145,13 +173,26 @@ def export_offline_author_packet(chapter: Chapter, inventory: dict[str, Any], ou
             except (ValueError, AttributeError):
                 reason = "Word comment unavailable; see visible appendix."
         anchors.append({"finding_id": item["finding_id"], "location": item.get("location"), "status": status, "reason": reason})
-    document.add_page_break()
-    document.add_heading("Offline Author Review Notes", level=1)
-    document.add_paragraph(NOTICE)
-    document.add_paragraph("Parser coverage: " + str(inventory.get("parser_coverage", chapter.parser_coverage)))
+    title = document.add_heading("Offline Author Review Notes", level=1)
+    title.paragraph_format.page_break_before = True
+    _review_paragraph(document, NOTICE)
+    _review_paragraph(document, "Parser coverage: " + str(inventory.get("parser_coverage", chapter.parser_coverage)), size=9)
     for note in inventory.get("coverage_notes", chapter.coverage_notes):
-        document.add_paragraph(str(note))
-    lines = ["# Offline Author Queries", "", NOTICE, "", "Inventory/evidence: citation-inventory.json. Decisions are pending human review.", ""]
+        _review_paragraph(document, str(note), size=9)
+    _review_paragraph(
+        document,
+        "Each record ID connects the full observation in citation-inventory.json with evidence-ledger.json and decision-ledger.json. Decisions remain pending. Excerpts below may be shortened.",
+        size=9,
+    )
+    lines = [
+        "# Offline Author Queries",
+        "",
+        textwrap.fill(NOTICE, width=88),
+        "",
+        "Each record ID connects citation-inventory.json, evidence-ledger.json and",
+        "decision-ledger.json. Decisions are pending. Excerpts may be shortened.",
+        "",
+    ]
     coverage = "\n".join(
         ["Parser coverage: " + str(inventory.get("parser_coverage", chapter.parser_coverage)), *[str(note) for note in inventory.get("coverage_notes", chapter.coverage_notes)]]
     )
@@ -162,20 +203,22 @@ def export_offline_author_packet(chapter: Chapter, inventory: dict[str, Any], ou
         lines.append(message)
     for index, (item, anchor) in enumerate(zip(findings, anchors, strict=True), 1):
         fid = item["finding_id"]
+        label = _QUERY_LABELS.get(item.get("category"), "Review this manuscript item")
+        action = item.get("author_query") or "Please review with the editor."
+        observed = " ".join(str(item.get("exact_text", "")).split())
+        excerpt = observed if len(observed) <= 180 else observed[:179] + "…"
+        anchor_label = "Comment attached" if anchor["status"] == "exact_text_comment" else "Appendix only — no safe comment anchor"
         fields = [
-            f"Location: {item.get('location', 'unavailable')}",
-            f"Observed text: {item.get('exact_text', '')}",
-            item.get("author_query") or "Please review with the editor.",
-            f"Anchor: {anchor['status']}. {anchor['reason']}",
-            f"Inventory pointer: citation-inventory.json / deterministic_findings / {fid}",
-            f"Citation IDs: {', '.join(item.get('citation_ids', [])) or 'none'}; reference IDs: {', '.join(item.get('reference_ids', [])) or 'none'}",
-            f"Evidence pointer: citation-inventory.json / deterministic_findings / {fid} / evidence (manuscript observations only)",
-            f"Decision ID: {fid}; human decision pending.",
+            action,
+            f"Observed excerpt: {excerpt}",
+            f"Location: {item.get('location', 'unavailable')} | {anchor_label}",
+            f"Record {fid} | evidence-ledger.json and decision-ledger.json",
         ]
-        document.add_heading(fid, level=2)
-        for field in fields:
-            document.add_paragraph(field)
-        lines.extend([f"## Query {index}", "", _literal_markdown("\n".join([f"Finding ID: {fid}", *fields])), ""])
+        entry_title = _review_paragraph(document, f"{index}. {label}", size=11, keep_next=True, bold=True)
+        entry_title.paragraph_format.space_before = Pt(8)
+        for field_index, field in enumerate(fields):
+            _review_paragraph(document, field, size=10 if field_index == 0 else 9, keep_next=field_index < len(fields) - 1)
+        lines.extend([f"## Query {index}", "", _literal_markdown("\n".join([label, *fields])), ""])
     buffer = BytesIO()
     document.save(buffer)
     if sha256_file(source) != chapter.sha256:

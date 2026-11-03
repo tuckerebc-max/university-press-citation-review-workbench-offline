@@ -16,6 +16,33 @@ NS = {"w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main"}
 
 
 class OfflineWordTests(unittest.TestCase):
+    def test_concise_entries_keep_action_excerpt_and_record_together(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            path = root / "chapter.txt"
+            path.write_text("A short source.", encoding="utf-8")
+            chapter = extract_chapter(SourceFile(path, path.name, path.stat().st_size, sha256_file(path)), "CH001")
+            finding = {
+                "finding_id": "F001",
+                "category": "edition_mismatch",
+                "location": "body.p0001",
+                "exact_text": "long observed text " * 80,
+                "author_query": "Please confirm the edition.",
+            }
+            export_offline_author_packet(chapter, {"deterministic_findings": [finding]}, root / "out")
+            doc = Document(root / "out" / "author-review.docx")
+            entry = next(i for i, p in enumerate(doc.paragraphs) if p.text == "1. Confirm the edition")
+            paragraphs = doc.paragraphs[entry : entry + 5]
+            self.assertEqual(paragraphs[1].text, "Please confirm the edition.")
+            self.assertLess(len(paragraphs[2].text), 210)
+            self.assertIn("Appendix only", paragraphs[3].text)
+            self.assertIn("F001", paragraphs[4].text)
+            self.assertIn("evidence-ledger.json", paragraphs[4].text)
+            self.assertTrue(all(p.paragraph_format.keep_with_next for p in paragraphs[:-1]))
+            self.assertFalse(paragraphs[-1].paragraph_format.keep_with_next)
+            markdown = (root / "out" / "author-queries.md").read_text(encoding="utf-8")
+            self.assertLessEqual(max(map(len, markdown.splitlines())), 100)
+
     def test_precise_anchor_and_visible_fallback_preserve_structure(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -158,3 +185,4 @@ class OfflineWordTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
