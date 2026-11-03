@@ -173,7 +173,7 @@ def build_private_review(source_path: str | Path, output_parent: str | Path, exp
         if hashes[copy.name] != digest or private_path(source.path) != source.path or sha256_file(source.path) != digest:
             raise SafetyError("Source changed during review. No completed packet was issued.")
         write_once_json(packet / "run-receipt.json", {
-            "schema_version": 1, "run_id": run_id, "issued_utc": utc_now(),
+            "schema_version": 1, "run_id": run_id, "issued_utc": utc_now(), "app_version": config.APP_VERSION,
             "implementation_sha256": tree_sha256(config.APP_ROOT / "upress_workbench"),
             "status": "offline_packet_built_pending_human_review", "mode": "offline_mechanical",
             "source_sha256_before": digest, "source_sha256_after": digest, "source_unchanged": True,

@@ -1,5 +1,7 @@
 # University Press Workbench verification record
 
+This is the September upstream record for the provider-assisted application. The separate private candidate has its own synthetic pilot and acceptance memo delivered outside the source tree. For this candidate's offline entry points, privacy boundary and verification command, see [Supervised private review](PRIVATE-REVIEW.md).
+
 Verification date: September 10, 2026
 
 Status: **Ready with conditions for supervised local production use.** The application, both pinned skills, a live LunaRoute run, the browser interface, and one generated Word packet were tested. The review found and corrected defects; this record does not claim the system is secure or ready for unattended publication work.

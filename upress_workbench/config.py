@@ -4,7 +4,7 @@ import os
 from pathlib import Path
 
 APP_NAME = "University Press Citation Review Workbench"
-APP_VERSION = "0.1.0"
+APP_VERSION = "0.2.0-private.1"
 HOST = "127.0.0.1"
 DEFAULT_PORT = 8765
 
