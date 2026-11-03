@@ -10,6 +10,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from docx import Document
+from docx.oxml.ns import qn
 
 from upress_workbench.ingest import extract_chapter
 from upress_workbench.offline import build_private_review, recover_interrupted, select_source
@@ -153,3 +154,19 @@ class PrivateReviewTests(unittest.TestCase):
         chapter = extract_chapter(select_source(self.source), "CH001")
         self.assertEqual([b.in_references for b in chapter.blocks], [False, True, True, True])
         self.assertIn("\n", chapter.blocks[0].text)
+
+    def test_merged_word_cell_observed_once_and_oversized_grid_blocked(self):
+        path = self.source.with_suffix(".docx")
+        doc = Document()
+        table = doc.add_table(rows=2, cols=3)
+        merged = table.cell(0, 0).merge(table.cell(1, 1))
+        merged.text = "Merged observation (One, 2001)"
+        table.cell(0, 2).text = "Separate column"
+        doc.save(path)
+        chapter = extract_chapter(select_source(path), "CH001")
+        self.assertEqual([b.text for b in chapter.blocks], [merged.text, "Separate column"])
+        self.assertTrue(chapter.blocks[1].locator.endswith("c003.p001"))
+        merged._tc.tcPr.gridSpan.set(qn("w:val"), "257")
+        doc.save(path)
+        with self.assertRaisesRegex(SafetyError, "table grid"):
+            extract_chapter(select_source(path), "CH001")

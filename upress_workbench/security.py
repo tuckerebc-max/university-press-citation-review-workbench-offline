@@ -135,7 +135,7 @@ def scan_sources(root: Path) -> list[SourceFile]:
                 if entry.is_symlink():
                     continue
                 if entry.is_dir(follow_symlinks=False):
-                    if not _is_reparse_point(path):
+                    if entry.name.casefold() != ".git" and not _is_reparse_point(path) and not os.path.lexists(path / ".git"):
                         pending.append(path)
                     continue
                 if not entry.is_file(follow_symlinks=False):
@@ -214,6 +214,10 @@ def _check_word_xml(root) -> None:
             raise SafetyError("DOCX contains SVG content; convert it to a local raster image before review.")
         if name.namespace not in _WORD_NAMESPACES:
             continue
+        if name.localname in {"gridSpan", "gridBefore", "gridAfter"}:
+            span = element.get(f"{{{name.namespace}}}val", "")
+            if not re.fullmatch(r"[0-9]{1,3}", span) or int(span) > 256 or (name.localname == "gridSpan" and int(span) == 0):
+                raise SafetyError("Unsupported Word table grid width. Flatten the table before review.")
         if name.localname in {"altChunk", "object", "control", "subDoc", "mailMerge"}:
             raise SafetyError("DOCX contains linked or active Word content; flatten it before review.")
         if name.localname == "fldSimple":

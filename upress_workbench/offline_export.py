@@ -80,10 +80,11 @@ def _exact_runs(paragraph, exact: str):
 
 def _paragraph_map(document, chapter):
     result = {}
+    paragraphs = document.paragraphs
     for block in chapter.blocks:
         index = block.paragraph_index
-        if block.locator.startswith("body.") and index is not None and 0 <= index < len(document.paragraphs):
-            paragraph = document.paragraphs[index]
+        if block.locator.startswith("body.") and index is not None and 0 <= index < len(paragraphs):
+            paragraph = paragraphs[index]
             if paragraph.text.strip() == block.text:
                 result[block.locator] = paragraph
     return result
@@ -117,16 +118,18 @@ def _text_document(payload: bytes, chapter: Chapter):
         raise SafetyError("Text chapters must be UTF-8 encoded.") from exc
     source_lines = re.split(r"\r\n|\n|\r", source_text)
     document = Document()
+    unique_lines = {}
     for line in source_lines:
         paragraph = document.add_paragraph(line)
         paragraph.paragraph_format.space_after = 0
         paragraph.paragraph_format.space_before = 0
+        unique_lines[line] = None if line in unique_lines else paragraph
     paragraphs = {}
     for block in chapter.blocks:
         # Transformed or multiline parser blocks cannot safely identify a source line.
-        matches = [index for index, line in enumerate(source_lines) if line == block.text]
-        if len(matches) == 1 and "\n" not in block.text and "\r" not in block.text:
-            paragraphs[block.locator] = document.paragraphs[matches[0]]
+        paragraph = unique_lines.get(block.text)
+        if paragraph is not None:
+            paragraphs[block.locator] = paragraph
     return document, paragraphs
 
 

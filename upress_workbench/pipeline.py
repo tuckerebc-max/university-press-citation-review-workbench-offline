@@ -21,6 +21,7 @@ from .citations import build_inventory
 from .crossref import lookup_many
 from .ingest import extract_chapter
 from .packets import build_chapter_packet, run_summary_html
+from .private_paths import private_path
 from .provider import CallBudget, LunaRouteClient
 from .review import author_items, load_skill_policy, run_rci, run_sei
 from .security import (
@@ -43,7 +44,7 @@ class RunManager:
         self._lock = threading.Lock()
 
     def scan(self, input_root: str) -> dict[str, Any]:
-        root = validate_input_root(input_root)
+        root = validate_input_root(private_path(input_root))
         sources = scan_sources(root)
         return {
             "input_root": str(root),
@@ -54,8 +55,8 @@ class RunManager:
         }
 
     def create_and_start(self, request: dict[str, Any]) -> str:
-        input_root = validate_input_root(str(request.get("input_root") or ""))
-        output_parent = validate_output_parent(str(request.get("output_parent") or ""), input_root)
+        input_root = validate_input_root(private_path(str(request.get("input_root") or "")))
+        output_parent = validate_output_parent(private_path(str(request.get("output_parent") or "")), input_root)
         project_label = str(request.get("project_label") or "University Press chapter review").strip()[:160]
         case_owner = str(request.get("case_owner") or "").strip()[:160]
         classification = str(request.get("classification") or "")

@@ -6,7 +6,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 
 from docx import Document
-from docx.table import Table
+from docx.table import Table, _Cell
 from lxml import etree
 
 from .config import MAX_MODEL_INPUT_CHARS
@@ -91,12 +91,17 @@ def _extract_docx(source: SourceFile, chapter_id: str) -> Chapter:
         elif isinstance(item, Table):
             table_index += 1
             for row_no, row in enumerate(item.rows, 1):
-                for cell_no, cell in enumerate(row.cells, 1):
+                # row.cells expands merged columns and repeats vertically merged
+                # text. Walk physical cells once, retaining the logical column.
+                cell_no = row.grid_cols_before + 1
+                for tc in row._tr.tc_lst:
+                    cell = _Cell(tc, item)
                     for para_no, paragraph in enumerate(cell.paragraphs, 1):
                         text = paragraph.text.strip()
                         if text:
                             locator = f"table.{table_index:03d}.r{row_no:03d}.c{cell_no:03d}.p{para_no:03d}"
                             blocks.append(Block(locator, text, "table", in_references))
+                    cell_no += tc.grid_span
 
     footnotes = _extract_note_part(source.path, "word/footnotes.xml", "footnote")
     endnotes = _extract_note_part(source.path, "word/endnotes.xml", "endnote")
