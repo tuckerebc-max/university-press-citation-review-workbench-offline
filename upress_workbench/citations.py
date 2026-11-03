@@ -41,6 +41,13 @@ def _date_key(value: str | None) -> str:
     return re.sub(r"\s+", "", value or "").casefold()
 
 
+def _title_key(value: str | None) -> str:
+    # Compare only observed title text, excluding a printed numeric edition.
+    # Publisher, title variations and translations are not inferred.
+    value = re.split(r"\(?\b\d+(?:st|nd|rd|th)?\s*(?:ed\b\.?|edition\b)", value or "", maxsplit=1, flags=re.I)[0]
+    return _normalized(value)
+
+
 def _findings(chapter: Chapter, citations: list[dict], references: list[dict]) -> list[dict]:
     findings = []
     blocks = {b.locator: b for b in chapter.blocks}
@@ -313,6 +320,7 @@ def build_inventory(chapter: Chapter) -> dict[str, Any]:
                     char_start=start,
                     char_end=date_match.end(),
                     title_identity_uncertain=True,
+                    observed_title=possessive[2],
                     edition=EDITION_RE.search(date_match[1])[1],
                 )
                 extracted.append(record)
@@ -374,6 +382,12 @@ def build_inventory(chapter: Chapter) -> dict[str, Any]:
         if not candidates and re.fullmatch(r"\d{4}", key[1]):
             candidates = [rid for (author, date), ids in ref_by_key.items() if author == key[0] and re.fullmatch(key[1] + "[a-z]", date) for rid in ids]
             citation["match_uncertain"] = bool(candidates)
+        if citation.get("title_identity_uncertain"):
+            title_candidates = [rid for rid in candidates if _title_key(references[int(rid[1:]) - 1]["title"]) == _title_key(citation.get("observed_title"))]
+            if len(title_candidates) == 1 and not citation.get("match_uncertain") and _title_key(citation.get("observed_title")):
+                candidates = title_candidates
+                citation["title_identity_uncertain"] = False
+                citation["match_method"] = "author_year_title"
         citation["candidate_reference_ids"] = candidates
         candidate_edges += len(candidates)
         if candidate_edges > 25000:
@@ -393,7 +407,7 @@ def build_inventory(chapter: Chapter) -> dict[str, Any]:
         citation_ids = [c["citation_id"] for c in linked]
         status = "orphan_reference" if not citation_ids else "matched"
         if not citation_ids and numeric_coverage:
-            status = "unassessed_coverage"
+            status = "not_checked"
         if any(len(c["candidate_reference_ids"]) > 1 or c.get("match_uncertain") for c in linked):
             status = "ambiguous_match"
         ledgers.append(
@@ -403,7 +417,9 @@ def build_inventory(chapter: Chapter) -> dict[str, Any]:
                 "citation_ids": citation_ids,
                 "reference_ids": [ref["reference_id"]],
                 "relationship_status": status,
-                "match_method": "exact_author_year" if status == "matched" else "none",
+                "match_method": ("author_year_title" if any(c.get("match_method") == "author_year_title" for c in linked) else "exact_author_year")
+                if status == "matched"
+                else "none",
                 "candidate_source_record_ids": [],
                 "confidence": 0.85 if status == "matched" else 0.45,
                 "evidence_ids": [f"MANUSCRIPT-{chapter.chapter_id}"],
@@ -428,7 +444,7 @@ def build_inventory(chapter: Chapter) -> dict[str, Any]:
             *chapter.coverage_notes,
             "Citation extraction is heuristic author-date parsing, not a complete style or scholarly verification. Numeric, note-only, short-title, nested citations, initials disambiguation, and group abbreviations may require manual inventory.",
             "Candidate author-year links are manuscript-local possibilities, not verified source identities. Reference entries must be segmented correctly upstream.",
-            "Organization conjunctions are retained. Multi-author fallback requires personal-author syntax in the observed reference. Possessive title/edition expressions receive manual identity queries. Numeric-style chapters suppress orphan claims because links are unassessed. Candidate graphs stop safely above 25000 links.",
+            "Organization conjunctions are retained. Multi-author fallback requires personal-author syntax in the observed reference. Possessive title/edition expressions require a unique local author/year/title candidate for edition comparison; unresolved identities receive manual queries. Numeric-style chapters suppress orphan claims because links are not checked. Candidate graphs stop safely above 25000 links.",
             "Caption checks cover extracted Figure/Table labels with numeric or multipart numbers and explicit colon/period/dash captions within this chapter only. Other label styles, implicit external targets, images and unextracted objects require review. Edition comparisons cover explicit numeric editions only.",
         ],
         "deterministic_findings": findings,

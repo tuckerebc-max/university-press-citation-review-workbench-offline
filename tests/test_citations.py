@@ -26,8 +26,10 @@ class CitationRegressionTests(unittest.TestCase):
         for finding in result["deterministic_findings"]:
             self.assertEqual(body[finding["char_start"] : finding["char_end"]], finding["exact_text"])
 
-    def test_possessive_title_edition_yields_scoped_query(self):
+    def test_possessive_title_edition_yields_local_mismatch(self):
         result = inventory("Smith's *A Book Title* (2020, 2nd ed.)", ["Smith, A. (2020). A Book Title (3rd ed.)."])
+        self.assertTrue(any(f["category"] == "edition_mismatch" for f in result["deterministic_findings"]))
+        result = inventory("Smith's *Different Title* (2020, 2nd ed.)", ["Smith, A. (2020). A Book Title (3rd ed.)."])
         self.assertTrue(any(f["category"] == "edition_identity_uncertainty" for f in result["deterministic_findings"]))
 
     def test_explosive_ambiguous_candidate_graph_stops_explicitly(self):
@@ -39,7 +41,15 @@ class CitationRegressionTests(unittest.TestCase):
     def test_numeric_style_does_not_flood_orphan_queries(self):
         result = inventory("Sources [1\u20133].", ["Smith, A. (2020). One.", "Jones, B. (2021). Two."])
         self.assertFalse(any(f["category"] == "orphan_reference" for f in result["deterministic_findings"]))
-        self.assertTrue(all(row["relationship_status"] == "unassessed_coverage" for row in result["ledger_entries"]))
+        self.assertTrue(all(row["relationship_status"] == "not_checked" for row in result["ledger_entries"]))
+        import json
+        from pathlib import Path
+
+        import jsonschema
+
+        schema = json.loads((Path(__file__).parents[1] / "vendor/reference-citation-integrity/schemas/ledger-entry.schema.json").read_text(encoding="utf-8"))
+        for row in result["ledger_entries"]:
+            jsonschema.validate(row, schema)
 
     def test_no_reference_heading_yields_inventory_query(self):
         chapter = Chapter(
