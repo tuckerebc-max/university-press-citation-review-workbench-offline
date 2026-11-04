@@ -286,6 +286,10 @@ def build_inventory(chapter: Chapter) -> dict[str, Any]:
             inside = match.group(1)
             for piece_match in re.finditer(r"[^;]+", inside):
                 piece = piece_match.group()
+                # Explicit sample sizes can resemble author/year citations when
+                # the count is in the year range. Exclude only that notation.
+                if re.fullmatch(r"\s*[nN]\s*=\s*\d+\s*", piece):
+                    continue
                 years = list(YEAR_RE.finditer(piece))
                 if not years:
                     continue

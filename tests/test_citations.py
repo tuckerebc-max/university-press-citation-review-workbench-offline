@@ -11,6 +11,32 @@ def inventory(body, refs):
 
 
 class CitationRegressionTests(unittest.TestCase):
+    def test_explicit_sample_size_parentheses_are_not_author_date_citations(self):
+        for count in (1500, 2020, 2099):
+            for notation in (f"n = {count}", f"N = {count}", f"n={count}", f"N= {count}", f" n\t=\t{count} "):
+                with self.subTest(notation=notation):
+                    result = inventory(f"Participants ({notation}) completed the study.", [])
+                    self.assertEqual(result["citations"], [])
+                    self.assertFalse(any(f["category"] == "missing_reference" for f in result["deterministic_findings"]))
+
+    def test_sample_size_segment_keeps_adjacent_real_citation(self):
+        body = "Participants (n = 2020; Smith, 2021) completed the study."
+        result = inventory(body, [])
+        self.assertEqual(len(result["citations"]), 1)
+        [citation] = result["citations"]
+        self.assertEqual(citation["authors_or_group"], ["smith"])
+        self.assertEqual(citation["raw_text"], "Smith, 2021")
+        [finding] = [f for f in result["deterministic_findings"] if f["category"] == "missing_reference"]
+        self.assertEqual(finding["exact_text"], "Smith, 2021")
+        self.assertEqual(body[finding["char_start"]:finding["char_end"]], "Smith, 2021")
+
+    def test_sample_size_exclusion_keeps_valid_author_and_group_forms(self):
+        result = inventory(
+            "(Smith, 2020). Smith (2020) agrees (NoDate, n.d.; N, 2021; n, 2021; Research Council, 2022).",
+            ["Smith, A. (2020). Title.", "NoDate, A. (n.d.). Title.", "N. (2021). Report.", "Research Council. (2022). Report."],
+        )
+        self.assertEqual([c["candidate_reference_ids"] for c in result["citations"]], [["R001"], ["R001"], ["R002"], ["R003"], ["R003"], ["R004"]])
+
     def test_narrative_spans_keep_original_author_whitespace(self):
         cases = [
             ("Smith and Jones (2020)", "Smith and Jones (2020)", 0, "Smith, A., & Jones, B. (2020). Title."),
