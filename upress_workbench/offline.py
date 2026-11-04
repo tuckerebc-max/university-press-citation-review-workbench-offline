@@ -27,7 +27,7 @@ _PACKET_FILES = frozenset({"author-review.docx", "author-queries.md", "citation-
 
 
 def recover_interrupted(output_parent: str | Path, discard: str | None = None) -> list[str]:
-    """List abandoned stages or explicitly discard one recognized, inactive stage."""
+    """List recognized inactive stages; preserve malformed markers for manual inspection."""
     parent = private_path(output_parent)
     if not parent.is_dir() or (discard is not None and not _STAGE_PATTERN.fullmatch(discard)):
         raise SafetyError("Select the private output folder and an exact incomplete-stage name.")
@@ -39,7 +39,12 @@ def recover_interrupted(output_parent: str | Path, discard: str | None = None) -
         marker = stage / "stage.json"
         if not marker.is_file() or private_path(marker) != marker:
             continue
-        info = json.loads(marker.read_text(encoding="utf-8"))
+        try:
+            info = json.loads(marker.read_text(encoding="utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            # A hard stop can leave a partial marker. Preserve that stage while
+            # allowing other recognized inactive stages to be discovered.
+            continue
         pid = info.get("pid") if isinstance(info, dict) else None
         if not isinstance(pid, int) or pid <= 0 or info.get("run_id") != "PrivateReview-" + match[1] or _process_is_alive(pid):
             continue

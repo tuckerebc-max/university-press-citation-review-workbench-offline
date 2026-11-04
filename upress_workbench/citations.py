@@ -334,9 +334,12 @@ def build_inventory(chapter: Chapter) -> dict[str, Any]:
             if not match:
                 continue
             author = match.group(1)
-            words = author.split()
+            word_spans = list(re.finditer(r"\S+", author))
+            words = [word.group() for word in word_spans]
+            first_word = 0
             while words and words[0].casefold() in {"as", "see", "in", "according", "to", "also"}:
                 words.pop(0)
+                first_word += 1
             if not words:
                 continue
             # A lower-case prose token bounds the author phrase on its left.
@@ -345,6 +348,7 @@ def build_inventory(chapter: Chapter) -> dict[str, Any]:
             particles = {"van", "von", "de", "der", "del", "da", "la", "et", "al.", "and", "&"}
             boundary = max((i for i, w in enumerate(words) if w[0].islower() and w.casefold() not in particles), default=-1)
             words = words[boundary + 1 :]
+            first_word += boundary + 1
             if not words:
                 continue
             # Trim prose before the first capitalized author token, retaining
@@ -355,7 +359,9 @@ def build_inventory(chapter: Chapter) -> dict[str, Any]:
             author = " ".join(words[start_word:])
             if any(w[0].islower() and w.casefold() not in particles for w in author.split()):
                 continue
-            start = date_match.start() - len(prefix) + match.start(1) + len(match.group(1)) - len(author)
+            # Match identity uses normalized words, but evidence offsets must
+            # retain their original whitespace and complete author tokens.
+            start = date_match.start() - len(prefix) + match.start(1) + word_spans[first_word + start_word].start()
             for year in years:
                 record = _citation_record(f"{author} ({year.group(0)})", block.locator, 0, "narrative")
                 record["raw_text"] = block.text[start : date_match.end()]

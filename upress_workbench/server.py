@@ -51,14 +51,15 @@ class Handler(BaseHTTPRequestHandler):
         host_value = self.headers.get("Host", "")
         try:
             parsed = urllib.parse.urlsplit("//" + host_value)
+            return parsed.hostname in {"127.0.0.1", "localhost", "::1"} and parsed.port == self.server.server_port
         except ValueError:
             return False
-        return parsed.hostname in {"127.0.0.1", "localhost", "::1"} and parsed.port == self.server.server_port
 
     def _mutation_allowed(self) -> bool:
         if not self._host_allowed():
             return False
-        if not secrets.compare_digest(self.headers.get("X-Workbench-Token", ""), self.server.session_token):
+        token = self.headers.get("X-Workbench-Token", "")
+        if not token.isascii() or not secrets.compare_digest(token, self.server.session_token):
             return False
         origin = self.headers.get("Origin")
         if not origin:

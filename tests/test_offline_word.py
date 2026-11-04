@@ -8,6 +8,7 @@ from pathlib import Path
 from docx import Document
 from lxml import etree
 
+from upress_workbench.citations import build_inventory
 from upress_workbench.ingest import extract_chapter
 from upress_workbench.offline_export import _exact_runs, export_offline_author_packet
 from upress_workbench.security import SourceFile, sha256_file
@@ -16,6 +17,33 @@ NS = {"w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main"}
 
 
 class OfflineWordTests(unittest.TestCase):
+    def test_narrative_comment_includes_full_author_with_original_spacing(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "source.docx"
+            document = Document()
+            document.add_paragraph("Recent work by Smith   and   Jones (2020).")
+            document.add_paragraph("References")
+            document.add_paragraph("Other, A. (2021). Title.")
+            document.save(source)
+            digest = sha256_file(source)
+            chapter = extract_chapter(SourceFile(source, source.name, source.stat().st_size, digest), "CH001")
+            export_offline_author_packet(chapter, build_inventory(chapter), root / "out")
+            with zipfile.ZipFile(root / "out" / "author-review.docx") as archive:
+                tree = etree.fromstring(archive.read("word/document.xml"))
+                paragraph = tree.find(".//w:body/w:p", NS)
+                selected = []
+                active = False
+                for child in paragraph:
+                    if child.tag.endswith("commentRangeStart"):
+                        active = True
+                    elif child.tag.endswith("commentRangeEnd"):
+                        active = False
+                    elif active:
+                        selected.extend(child.xpath(".//w:t/text()", namespaces=NS))
+                self.assertEqual("".join(selected), "Smith   and   Jones (2020)")
+            self.assertEqual(sha256_file(source), digest)
+
     def test_concise_entries_keep_action_excerpt_and_record_together(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

@@ -11,6 +11,28 @@ def inventory(body, refs):
 
 
 class CitationRegressionTests(unittest.TestCase):
+    def test_narrative_spans_keep_original_author_whitespace(self):
+        cases = [
+            ("Smith and Jones (2020)", "Smith and Jones (2020)", 0, "Smith, A., & Jones, B. (2020). Title."),
+            ("Smith   and   Jones (2020)", "Smith   and   Jones (2020)", 0, "Smith, A., & Jones, B. (2020). Title."),
+            ("Smith\tand\tJones (2020)", "Smith\tand\tJones (2020)", 0, "Smith, A., & Jones, B. (2020). Title."),
+            ("Smith\nand\nJones (2020)", "Smith\nand\nJones (2020)", 0, "Smith, A., & Jones, B. (2020). Title."),
+            ("Recent work by Smith   and   Jones (2020).", "Smith   and   Jones (2020)", 15, "Smith, A., & Jones, B. (2020). Title."),
+            ("Recent work by van   der   Waals (2020).", "van   der   Waals (2020)", 15, "van der Waals, A. (2020). Title."),
+            ("See World   Health\tOrganization (2020).", "World   Health\tOrganization (2020)", 4, "World Health Organization. (2020). Report."),
+            ("Smith,   Jones,   and   Li (2020).", "Smith,   Jones,   and   Li (2020)", 0, "Smith, A., Jones, B., & Li, C. (2020). Title."),
+        ]
+        for body, exact, start, reference in cases:
+            with self.subTest(body=body):
+                [citation] = inventory(body, [reference])["citations"]
+                self.assertEqual(citation["candidate_reference_ids"], ["R001"])
+                self.assertEqual(citation["char_start"], start)
+                self.assertEqual(citation["char_end"], start + len(exact))
+                self.assertEqual(citation["raw_text"], exact)
+                [finding] = [f for f in inventory(body, [])["deterministic_findings"] if f["category"] == "missing_reference"]
+                self.assertEqual(finding["exact_text"], exact)
+                self.assertEqual(body[finding["char_start"]:finding["char_end"]], exact)
+
     def test_caption_with_markdown_emphasis_matches_only_local_target(self):
         for caption in ("**Table 4.** Result", "__Table 4__: Result", "### Table 4: Result"):
             result = inventory(f"See Table 4 and Table 5.\n{caption}", [])
