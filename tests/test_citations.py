@@ -11,6 +11,32 @@ def inventory(body, refs):
 
 
 class CitationRegressionTests(unittest.TestCase):
+    def test_explicit_locator_numbers_do_not_become_citation_dates(self):
+        for locator in ("p.1999", "p. 1999", "pp. 1999\u20132001", "pp.1999-2001", "pp. 1999, 2001", "pp.1999\u20132001,2005", "pp. 1999 \u2013 2001, 2005", "pp.1999 - 2001", "para. 1999", "chapter 1999", "Table 1999", "Figure 1999", "p. 1999, p. 2001"):
+            for body in (f"Evidence (Smith, 2020, {locator}).", f"Smith (2020, {locator}) reports."):
+                with self.subTest(body=body):
+                    result = inventory(body, ["Smith, A. (2020). Title."])
+                    self.assertEqual([c["year"] for c in result["citations"]], ["2020"])
+                    self.assertEqual(result["citations"][0]["candidate_reference_ids"], ["R001"])
+                    self.assertFalse(any(f["category"] == "missing_reference" for f in result["deterministic_findings"]))
+
+    def test_locator_filter_keeps_genuine_dates_and_missing_reference_queries(self):
+        refs = ["Smith, A. (2019). Earlier title.", "Smith, A. (2020). Later title."]
+        for body in ("(Smith, 2019, 2020)", "(Smith, 2019, p. 1999, 2020)", "Smith (2019, p. 1999, 2020) reports.", "(Smith, 2019, 2020, pp. 1999\u20132001)", "Smith (2019, 2020, pp. 1999, 2001) reports.", "(Smith, 2019, p. 1999; Smith, 2020, p. 2001)"):
+            with self.subTest(body=body):
+                result = inventory(body, refs)
+                self.assertEqual([c["year"] for c in result["citations"]], ["2019", "2020"])
+                self.assertEqual([c["candidate_reference_ids"] for c in result["citations"]], [["R001"], ["R002"]])
+        for references in ([], ["Smith, A. (2021). Near date."]):
+            result = inventory("Evidence (Smith, 2020, p. 1999).", references)
+            self.assertEqual([c["year"] for c in result["citations"]], ["2020"])
+            self.assertEqual(len([f for f in result["deterministic_findings"] if f["category"] == "missing_reference"]), 1)
+
+    def test_explicit_locator_without_date_is_not_a_citation(self):
+        for body in ("See (p. 1999).", "See (chapter 1999).", "Smith (p. 1999) reports."):
+            with self.subTest(body=body):
+                self.assertEqual(inventory(body, [])["citations"], [])
+
     def test_explicit_sample_size_parentheses_are_not_author_date_citations(self):
         for count in (1500, 2020, 2099):
             for notation in (f"n = {count}", f"N = {count}", f"n={count}", f"N= {count}", f" n\t=\t{count} "):

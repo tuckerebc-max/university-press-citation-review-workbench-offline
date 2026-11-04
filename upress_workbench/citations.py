@@ -14,6 +14,20 @@ EDITION_RE = re.compile(r"\b(\d+)(?:st|nd|rd|th)?\s*(?:ed\.|edition\b)", re.I)
 TARGET_RE = re.compile(r"\b(Figure|Table)\s+(\d+(?:\.\d+)*[a-z]?)\b", re.I)
 CAPTION_RE = re.compile(r"^[ \t]*(?:#{1,6}[ \t]+)?[*_]{0,2}(Figure|Table)\s+(\d+(?:\.\d+)*[a-z]?)[*_]{0,2}\s*[.:\u2014-][*_]{0,2}[ \t]+\S", re.I | re.M)
 NUMERIC_RE = re.compile(r"\[\d+(?:\s*[,\u2013-]\s*\d+)*\]")
+_PAGE_NUMBER = r"\d+\w*(?:\s*[\u2013-]\s*\d+\w*)?"
+LOCATOR_RE = re.compile(
+    rf"\b(?:pp\.\s*{_PAGE_NUMBER}(?:\s*,\s*{_PAGE_NUMBER})*|(?:p\.|para\.|chapter|table|figure)\s*\d+[\w\u2013-]*)",
+    re.I,
+)
+
+
+def _citation_years(text: str) -> list[re.Match[str]]:
+    """Keep dates outside explicit locator spans, retaining original offsets."""
+    locators = [match.span() for match in LOCATOR_RE.finditer(text)]
+    return [
+        year for year in YEAR_RE.finditer(text)
+        if not any(start <= year.start() and year.end() <= end for start, end in locators)
+    ]
 
 
 def _normalized(value: str) -> str:
@@ -290,7 +304,7 @@ def build_inventory(chapter: Chapter) -> dict[str, Any]:
                 # the count is in the year range. Exclude only that notation.
                 if re.fullmatch(r"\s*[nN]\s*=\s*\d+\s*", piece):
                     continue
-                years = list(YEAR_RE.finditer(piece))
+                years = _citation_years(piece)
                 if not years:
                     continue
                 author = piece[: years[0].start()].strip(" ,")
@@ -301,7 +315,7 @@ def build_inventory(chapter: Chapter) -> dict[str, Any]:
                     segment_start = match.start(1) + piece_match.start() + len(piece) - len(piece.lstrip())
                     segment_end = match.start(1) + piece_match.end() - len(piece) + len(piece.rstrip())
                     record["raw_text"] = block.text[segment_start:segment_end]
-                    locator = re.search(r"\b(?:pp?\.|para\.|chapter|table|figure)\s*\d+[\w\u2013-]*", piece, re.I)
+                    locator = LOCATOR_RE.search(piece)
                     record["locator"] = locator.group(0) if locator else None
                     edition = EDITION_RE.search(piece)
                     record["edition"] = edition[1] if edition else None
@@ -311,7 +325,7 @@ def build_inventory(chapter: Chapter) -> dict[str, Any]:
         # are retained; arbitrary sentence prefixes are not treated as group names.
         narrative = re.compile(r"(?<![\w])([^\W\d_][\w\u2019'\u2013-]*(?:,?\s+(?:[^\W\d_][\w\u2019'\u2013-]*|&|et|al\.))*)\s*$", re.UNICODE)
         for date_match in re.finditer(r"\(([^()]{1,500})\)", block.text):
-            years = list(YEAR_RE.finditer(date_match.group(1)))
+            years = _citation_years(date_match.group(1))
             if not years or date_match.group(1)[: years[0].start()].strip():
                 continue
             prefix = block.text[max(0, date_match.start() - 250) : date_match.start()]
@@ -372,7 +386,7 @@ def build_inventory(chapter: Chapter) -> dict[str, Any]:
                 record["char_start"], record["char_end"] = start, date_match.end()
                 edition = EDITION_RE.search(date_match.group(1))
                 record["edition"] = edition[1] if edition else None
-                locator = re.search(r"\b(?:pp?\.|para\.)\s*\d+[\w\u2013-]*", date_match.group(1), re.I)
+                locator = LOCATOR_RE.search(date_match.group(1))
                 record["locator"] = locator.group(0) if locator else None
                 extracted.append(record)
         for record in sorted(extracted, key=lambda c: (c["char_start"], c["char_end"])):
